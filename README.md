@@ -1,5 +1,7 @@
 # NTRIP Scope
 
+<img src="assets/orbit.png" alt="NTRIP Scope satellite application icon" width="128">
+
 Desktop NTRIP client and RTCM3 stream inspector with English and Italian interfaces.
 
 ## Download
