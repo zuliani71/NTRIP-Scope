@@ -1,9 +1,12 @@
 import socket
+import sys
 import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pyrtcm import calc_crc24q
 from gnss import Decoder, dms, from_dms, gga, observations

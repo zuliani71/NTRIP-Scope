@@ -7,7 +7,8 @@ from pathlib import Path
 
 
 def main():
-    root = Path(__file__).resolve().parent
+    source = Path(__file__).resolve().parent
+    root = source.parents[1]
     with tempfile.TemporaryDirectory() as folder:
         options = []
         if sys.platform == "win32":
@@ -22,7 +23,7 @@ def main():
             options += ["--icon", str(icon), "--windowed"]
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
                         "--name", "NTRIP-Scope", "--add-data", "assets:assets",
-                        "--collect-submodules", "serial", *options, "app.py"],
+                        "--collect-submodules", "serial", *options, str(source / "app.py")],
                        cwd=root, check=True)
 
 

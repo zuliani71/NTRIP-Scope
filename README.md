@@ -23,6 +23,14 @@ On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and
 - Live HEX and ASCII, CRC validation, frame history by RTCM type, decoded fields, MSM observations and a C/N₀ chart.
 - Independent map and GPS sky windows. When rover coordinates are entered, a blue marker and a labelled baseline show the approximate horizontal distance to the mountpoint. Choose Street map for roads and place names or Offline map for the bundled Natural Earth basemap. The street view uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. The portable app requests and caches only the visible OpenStreetMap tiles. Switch to Offline map to keep the view local. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch from the selected stream.
 
+## Source layout
+
+| Directory | Contents |
+|---|---|
+| [src/macos/](src/macos/) | Native macOS app in Swift and its build script |
+| [src/portable/](src/portable/) | Shared Windows and Linux app in Python |
+| [assets/](assets/) | Shared map, icon and localization files |
+
 ## Run from source
 
 Use Python 3.10+ with Tk. On Debian/Ubuntu install `python3-tk` and `python3-venv`. On Windows, install Python with the Tcl/Tk option enabled.
@@ -34,8 +42,8 @@ python -m venv .venv
 Activate the environment with `.venv\Scripts\Activate.ps1` on Windows PowerShell or `source .venv/bin/activate` on Linux. Then run:
 
 ```sh
-python -m pip install -r requirements.txt
-python app.py
+python -m pip install -r src/portable/requirements.txt
+python src/portable/app.py
 ```
 
 On Linux, the account running the app needs access to the selected serial device. TCP output listens on `127.0.0.1` and supports one receiving client at a time.
@@ -45,14 +53,12 @@ On Linux, the account running the app needs access to the selected serial device
 Run these commands on the target operating system:
 
 ```sh
-python -m pip install -r requirements-build.txt
-python -m unittest discover -s tests -v
-python build.py
+python -m pip install -r src/portable/requirements-build.txt
+python -m unittest discover -s src/portable/tests -v
+python src/portable/build.py
 ```
 
-The executable appears in `dist/`. To rebuild the macOS archive on an Apple Silicon Mac with the Swift toolchain, run `sh macos/build.sh`. The GitHub Actions workflow builds and smoke-tests Windows and Linux and uploads the artifacts for download from the workflow run. The same workflow provides the existing Apple Silicon package. Create a GitHub Release separately if you want to offer persistent download links.
-
-To create a GitHub project, use the contents of this directory as the root of a new repository, including the hidden `.github/` directory. Attach built binaries to the release rather than adding the contents of the ignored `dist/` directory to Git. Publish only this project directory, which contains sample test credentials and no saved caster profiles.
+The executable appears in `dist/`. To rebuild the macOS archive on an Apple Silicon Mac with the Swift toolchain, run `sh src/macos/build.sh`.
 
 ## Credits
 

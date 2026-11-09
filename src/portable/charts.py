@@ -1,6 +1,7 @@
 """Canvas views for the offline map and GNSS plots."""
 import json
 import math
+import sys
 import webbrowser
 from pathlib import Path
 from tkinter import Canvas, PhotoImage, TclError, ttk
@@ -11,7 +12,8 @@ from tiles import load_tile, project, unproject
 
 from gnss import dms, orbit_position, sky_point
 
-ASSETS = Path(__file__).resolve().parent / "assets"
+HERE = Path(__file__).resolve().parent
+ASSETS = (HERE if getattr(sys, "frozen", False) else HERE.parents[1]) / "assets"
 COLORS = ("#38bdf8", "#fb923c", "#4ade80", "#f472b6", "#a78bfa", "#facc15")
 BG = "#10243a"
 FG = "#e5eef7"
