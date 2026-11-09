@@ -15,6 +15,16 @@ Choose the package for your system from the [v1.10 release](https://github.com/z
 
 On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux binaries target Ubuntu 22.04 or compatible systems.
 
+## Screenshots
+
+**RTCM3 decoder and C/N₀ chart**
+
+![NTRIP Scope decoder showing GPS MSM5 messages and carrier-to-noise density by satellite slot](docs/screenshots/rtcm-cnr.png)
+
+**Measurements by satellite and signal**
+
+![NTRIP Scope table showing pseudorange, phase range, C/N₀ and range rate for GPS signals](docs/screenshots/rtcm-measurements.png)
+
 ## Features
 
 - NTRIP 1.0 and 2.0, caster authentication, TLS and mountpoint discovery.
