@@ -45,8 +45,12 @@ python build.py
 
 The executable appears in `dist/`. To rebuild the macOS archive on an Apple Silicon Mac with the Swift toolchain, run `sh macos/build.sh`. The GitHub Actions workflow builds and smoke-tests Windows and Linux and uploads the artifacts for download from the workflow run. The same workflow provides the existing Apple Silicon package. Create a GitHub Release separately if you want to offer persistent download links.
 
-To create a GitHub project, use the contents of this directory as the root of a new repository, including the hidden `.github/` directory. Choose a source license before making the project public. Attach built binaries to the release rather than adding the contents of the ignored `dist/` directory to Git. Publish only this project directory, which contains sample test credentials and no saved caster profiles.
+To create a GitHub project, use the contents of this directory as the root of a new repository, including the hidden `.github/` directory. Attach built binaries to the release rather than adding the contents of the ignored `dist/` directory to Git. Publish only this project directory, which contains sample test credentials and no saved caster profiles.
 
 ## Credits
 
 The portable decoder uses [pyrtcm](https://github.com/semuconsulting/pyrtcm), serial I/O uses [pySerial](https://github.com/pyserial/pyserial), and executable packaging uses [PyInstaller](https://pyinstaller.org/). The portable basemap is made with [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) public-domain 1:110m land data, version 5.1.2. The portable street map uses [OpenStreetMap](https://www.openstreetmap.org/copyright) under its [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).
+
+## License
+
+NTRIP Scope is distributed under the [MIT License](LICENSE), copyright © 2026 zuliani71. Preserve the copyright and license notice when redistributing the software. Third-party components retain their own licenses.
