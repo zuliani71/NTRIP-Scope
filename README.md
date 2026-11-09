@@ -17,13 +17,13 @@ On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and
 
 ## Screenshots
 
-**RTCM3 decoder and C/N₀ chart**
+| Live NTRIP connection | Rover and mountpoint map |
+| --- | --- |
+| ![NTRIP Scope receiving data from a connected caster](docs/screenshots/live-connection.png) | ![Street map showing the rover, mountpoint and distance between them](docs/screenshots/rover-map.png) |
 
-![NTRIP Scope decoder showing GPS MSM5 messages and carrier-to-noise density by satellite slot](docs/screenshots/rtcm-cnr.png)
-
-**Measurements by satellite and signal**
-
-![NTRIP Scope table showing pseudorange, phase range, C/N₀ and range rate for GPS signals](docs/screenshots/rtcm-measurements.png)
+| RTCM3 decoder and C/N₀ chart | Measurements by satellite and signal |
+| --- | --- |
+| ![RTCM3 decoder showing GPS MSM5 and carrier-to-noise density by satellite slot](docs/screenshots/rtcm-cnr.png) | ![Table showing pseudorange, phase range, C/N₀ and range rate for GPS signals](docs/screenshots/rtcm-measurements.png) |
 
 ## Features
 
