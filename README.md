@@ -29,7 +29,7 @@ On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and
 
 - NTRIP 1.0 and 2.0, caster authentication, TLS and mountpoint discovery.
 - Rover coordinates in decimal degrees or degrees, minutes and seconds. GGA for VRS, with periodic updates.
-- Optional raw RTCM recording, loopback TCP forwarding and serial output. You can monitor a stream with all outputs off.
+- **RTCM stream forwarding** to a file, a local TCP port, or a serial port available on the operating system. Enable any combination of outputs, or monitor the stream with all outputs disabled.
 - Live HEX and ASCII, CRC validation, frame history by RTCM type, decoded fields, MSM observations and a C/N₀ chart.
 - Independent map and GPS sky windows. When rover coordinates are entered, a blue marker and a labelled baseline show the approximate horizontal distance to the mountpoint. Choose Street map for roads and place names or Offline map for the bundled Natural Earth basemap. The street view uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. The portable app requests and caches only the visible OpenStreetMap tiles. Switch to Offline map to keep the view local. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch from the selected stream.
 
