@@ -6,10 +6,10 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT HUP INT TERM
 app='NTRIP Scope - RTCM Decoder.app'
 
-ditto -x -k "$here/NTRIP-Scope-1.10.zip" "$stage"
+mkdir -p "$stage/$app/Contents/MacOS" "$stage/$app/Contents/Resources"
+cp "$here/Info.plist" "$stage/$app/Contents/Info.plist"
+cp "$here/Orbit.icns" "$stage/$app/Contents/Resources/Orbit.icns"
 cp "$here/../assets/land.json" "$stage/$app/Contents/Resources/land.json"
-plutil -replace CFBundleVersion -string 11 "$stage/$app/Contents/Info.plist"
-plutil -replace CFBundleShortVersionString -string 1.10 "$stage/$app/Contents/Info.plist"
 swiftc -parse-as-library -O -target arm64-apple-macos13.0 -module-cache-path "$stage/module-cache" \
   "$here/Language.swift" "$here/RTCMDecoder.swift" "$here/StationSky.swift" \
   "$here/RoverPosition.swift" "$here/NTRIP.swift" \

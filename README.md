@@ -2,11 +2,18 @@
 
 Desktop NTRIP client and RTCM3 stream inspector with English and Italian interfaces.
 
-| Platform | App |
+## Download
+
+Choose the package for your system from the [v1.10 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.10).
+
+| Platform | Package |
 |---|---|
-| macOS 13+ on Apple Silicon | Native SwiftUI app. The ad-hoc-signed build is in [macos/](macos/). |
-| Windows x64 | Portable desktop app. Run from source or obtain `NTRIP-Scope.exe` from a successful Windows build. |
-| Linux x64 and ARM64 | Portable desktop app. Run from source or obtain the executable archive from a successful Linux build. The binaries target Ubuntu 22.04 or compatible systems. Run `uname -m` to select the archive. Use `linux-arm64` for `aarch64` (including Ubuntu in Parallels on Apple Silicon), and `linux-x64` for `x86_64`. |
+| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-macos-arm64.zip) |
+| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-windows-x64.zip) |
+| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-linux-arm64.tar.gz) |
+| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-linux-x64.tar.gz) |
+
+On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux binaries target Ubuntu 22.04 or compatible systems.
 
 ## Features
 
