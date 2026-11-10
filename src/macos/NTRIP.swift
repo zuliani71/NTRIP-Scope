@@ -39,7 +39,7 @@ final class Radio: ObservableObject {
     private var serialPath = ""
 
     private var connection: NWConnection?
-    private var file: FileHandle?
+    private var files: [FileHandle] = []
     private var timer: Timer?
     private var buffer = Data()
     private var readingHeader = true
@@ -68,8 +68,8 @@ final class Radio: ObservableObject {
         timer = nil
         connection?.cancel()
         connection = nil
-        try? file?.close()
-        file = nil
+        for file in files { try? file.close() }
+        files.removeAll()
         busy = false
         status = message
     }
@@ -77,7 +77,7 @@ final class Radio: ObservableObject {
     func start(host: String, port: String, mount: String, user: String, password: String,
                tls: Bool, version2: Bool, list: Bool, gga: String, output: URL?,
                tcpPort: String? = nil, serialDevice: String? = nil, baud: Int = 115200,
-               rover: RoverPosition? = nil) {
+               rover: RoverPosition? = nil, additionalFiles: [URL] = []) {
         stop()
         let host = host.trimmingCharacters(in: .whitespaces)
         let mount = Self.cleanMount(mount)
@@ -104,8 +104,10 @@ final class Radio: ObservableObject {
         }
         if !list, let output {
             do {
-                try Data().write(to: output, options: .atomic)
-                file = try FileHandle(forWritingTo: output)
+                for url in [output] + additionalFiles {
+                    try Data().write(to: url, options: .atomic)
+                    files.append(try FileHandle(forWritingTo: url))
+                }
             } catch {
                 stop("File: \(error.localizedDescription)")
                 return
@@ -303,7 +305,7 @@ final class Radio: ObservableObject {
             else if table.count > 4_000_000 { stop("Elenco mountpoint troppo grande") }
             return
         }
-        do { try file?.write(contentsOf: data) }
+        do { for file in files { try file.write(contentsOf: data) } }
         catch { stop("Registrazione interrotta: \(error.localizedDescription)"); return }
         forward(data)
         count += data.count
@@ -550,6 +552,7 @@ struct RadioView: View {
     @State private var showOptions = false
     @State private var save = false
     @State private var output: URL?
+    @State private var importedFiles: [URL] = []
     @State private var serial = false
     @State private var device = ""
     @State private var devices: [String] = []
@@ -720,11 +723,50 @@ struct RadioView: View {
             Divider()
             HStack {
                 Spacer()
+                Button(tr("Carica configurazione…")) { loadINI() }
                 Button(tr("Fine")) { showOptions = false }.keyboardShortcut(.cancelAction)
             }
         }
         .padding(20)
         .frame(width: 440, height: 340)
+    }
+
+    private func loadINI() {
+        let picker = NSOpenPanel()
+        picker.canChooseDirectories = false
+        picker.allowsMultipleSelection = false
+        guard picker.runModal() == .OK, let url = picker.url else { return }
+        do {
+            let config = try INIConfiguration(url: url)
+            host = config.host; port = String(config.port); mount = config.mount
+            user = config.username; password = config.password; tls = config.tls
+            version2 = config.version == 2
+            importedFiles = config.files
+            save = !config.files.isEmpty; output = config.files.first
+            tcp = config.tcp != nil; tcpPort = String(config.tcp ?? 5000)
+            refreshDevices()
+            serial = config.serial != nil; device = config.serial?.0 ?? ""; baud = config.serial?.1 ?? 115200
+            if !device.isEmpty && !devices.contains(device) { devices.append(device) }
+            gga = ""
+            roverDraft = RoverDraft()
+            if let (lat, lon) = config.coordinates {
+                let locale = Locale(identifier: language)
+                roverDraft.enabled = true
+                roverDraft.latitude.decimal = String(lat)
+                roverDraft.longitude.decimal = String(lon)
+                roverDraft.latitude.updateDecimal(limit: 90, locale: locale)
+                roverDraft.longitude.updateDecimal(limit: 180, locale: locale)
+                roverDraft.height = String(config.height)
+                roverDraft.separation = String(config.geoid)
+            }
+            radio.status = "Configurazione caricata"
+            showOptions = false
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = tr("Configurazione INI non valida")
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 
     private func refreshDevices() {
@@ -745,10 +787,18 @@ struct RadioView: View {
             showOptions = true
             return
         }
+        let extra = save && output == importedFiles.first ? Array(importedFiles.dropFirst()) : []
+        if !list, save, let output, ([output] + extra).contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            let alert = NSAlert()
+            alert.messageText = tr("Sovrascrivere i file di uscita esistenti?")
+            alert.addButton(withTitle: tr("Sovrascrivi"))
+            alert.addButton(withTitle: tr("Annulla"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         radio.start(host: host, port: port, mount: mount, user: user, password: password,
                     tls: tls, version2: version2, list: list, gga: roverDraft.enabled ? "" : gga,
                     output: save ? output : nil, tcpPort: tcp ? tcpPort : nil,
-                    serialDevice: serial ? device : nil, baud: baud, rover: rover)
+                    serialDevice: serial ? device : nil, baud: baud, rover: rover, additionalFiles: extra)
         if !list && radio.busy && save { output = nil }
     }
 

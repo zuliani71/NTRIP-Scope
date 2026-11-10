@@ -12,7 +12,7 @@ cp "$here/Orbit.icns" "$stage/$app/Contents/Resources/Orbit.icns"
 cp "$here/../../assets/land.json" "$stage/$app/Contents/Resources/land.json"
 swiftc -parse-as-library -O -target arm64-apple-macos13.0 -module-cache-path "$stage/module-cache" \
   "$here/Language.swift" "$here/RTCMDecoder.swift" "$here/StationSky.swift" \
-  "$here/RoverPosition.swift" "$here/NTRIP.swift" \
+  "$here/RoverPosition.swift" "$here/INIConfiguration.swift" "$here/NTRIP.swift" \
   -o "$stage/$app/Contents/MacOS/NTRIPRadio"
 codesign --force --sign - "$stage/$app"
 codesign --verify --strict "$stage/$app"

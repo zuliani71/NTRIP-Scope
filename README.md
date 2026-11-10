@@ -2,11 +2,13 @@
 
 <img src="assets/orbit.png" alt="NTRIP Scope satellite application icon" width="128">
 
-Desktop NTRIP client and RTCM3 stream inspector with English and Italian interfaces.
+NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
 
-## Download
+## Downloads
 
-Choose the package for your system from the [v1.10 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.10).
+### Desktop client
+
+Choose the package for your system from the [v1.10 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.10). To use the desktop INI importer, [build version 1.11 from source](#build-and-test).
 
 | Platform | Package |
 |---|---|
@@ -17,7 +19,7 @@ Choose the package for your system from the [v1.10 release](https://github.com/z
 
 On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux binaries target Ubuntu 22.04 or compatible systems.
 
-## Command-line client
+### Command-line client
 
 Download [ntripscope.zip](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/ntripscope.zip)
 and extract it on macOS, Windows or Linux. It requires Python 3.10 or later.
@@ -48,18 +50,31 @@ Build a standalone executable on the target system with
 
 ## Features
 
-- NTRIP 1.0 and 2.0, caster authentication, TLS and mountpoint discovery.
-- Rover coordinates in decimal degrees or degrees, minutes and seconds. GGA for VRS, with periodic updates.
-- **RTCM stream forwarding** to a file, a local TCP port, or a serial port available on the operating system. Enable any combination of outputs, or monitor the stream with all outputs disabled.
-- Live HEX and ASCII, CRC validation, frame history by RTCM type, decoded fields, MSM observations and a C/N₀ chart.
-- Independent map and GPS sky windows. When rover coordinates are entered, a blue marker and a labelled baseline show the approximate horizontal distance to the mountpoint. Choose Street map for roads and place names or Offline map for the bundled Natural Earth basemap. The street view uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. The portable app requests and caches only the visible OpenStreetMap tiles. Switch to Offline map to keep the view local. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch from the selected stream.
+| Capability | Desktop client | Command-line client |
+|---|---|---|
+| NTRIP connection | NTRIP 1.0 and 2.0, authentication, TLS and mountpoint selection from the sourcetable | NTRIP 1.0 and 2.0, authentication, TLS and mountpoint listing with `--list` |
+| Rover position for VRS | Decimal and sexagesimal coordinate entry with automatic conversion and periodic GGA | Decimal coordinates via arguments or INI and periodic GGA |
+| RTCM outputs | Optional file, local TCP and serial outputs. Monitor with all outputs disabled | Raw binary RTCM on standard output by default. Repeatable file, TCP and serial destinations, with optional simultaneous standard output |
+| Shared configuration | Import an INI from **Options → Load configuration…** in version 1.11 | Read an INI with `--config`. Command-line options override corresponding file settings |
+| Stream inspection | Live HEX and ASCII, CRC checks, frame history, RTCM3 fields, MSM measurements and a C/N₀ chart | Raw stream for processing by scripts or external decoders. Status and errors go to standard error |
+| Map and GPS sky | Separate windows with street and offline maps, scale, rover-to-mountpoint distance and GPS tracks when ephemerides are available | Headless operation for scripts and automated workflows |
+
+The street map uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch.
+
+## Share an INI configuration
+
+Starting with version 1.11, the desktop app can load the same file used by `ntripscope --config`.
+Choose **Options → Load configuration…** to populate the caster, mountpoint, credentials, rover coordinates for VRS, and file, TCP and serial outputs. Then choose **Connect** or **Fetch mountpoints**.
+The CLI settings `stdout` and `list` apply only to command-line runs.
+The macOS desktop app accepts multiple files, one TCP port and one serial device per session.
+Use a serial device name appropriate for the system where the configuration runs.
 
 ## Source layout
 
 | Directory | Contents |
 |---|---|
 | [src/macos/](src/macos/) | Native macOS app in Swift and its build script |
-| [src/portable/](src/portable/) | Shared Windows and Linux app in Python |
+| [src/portable/](src/portable/) | Shared Windows and Linux desktop app and cross-platform command-line client in Python |
 | [assets/](assets/) | Shared map, icon and localization files |
 
 ## Run from source

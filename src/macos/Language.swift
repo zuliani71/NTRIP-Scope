@@ -27,6 +27,12 @@ private let translatedPrefixes = [
 ]
 
 private let translations: [String: String] = [
+    "Carica configurazione…": "Load configuration…",
+    "Configurazione caricata": "Configuration loaded",
+    "Configurazione INI non valida": "Invalid INI configuration",
+    "Sovrascrivere i file di uscita esistenti?": "Overwrite existing output files?",
+    "Sovrascrivi": "Overwrite", "Annulla": "Cancel",
+
     "Mappa stradale": "Street map", "Mappa offline": "Offline map",
     "Scala mappa": "Map scale",
     "Posizione rover…": "Rover position…", "Posizione rover": "Rover position",

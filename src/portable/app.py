@@ -1,4 +1,5 @@
 """NTRIP Scope portable desktop client."""
+from configparser import Error as INIError
 import json
 import os
 import queue
@@ -11,7 +12,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from charts import ASSETS, BG, MapSky, cnr_chart
 from gnss import Decoder, dms, fields, from_dms, gga, observations
-from transport import Cancelled, Connection, run
+from transport import Cancelled, Connection, Outputs, run
+from ntripscope import arguments as cli_arguments, settings
 
 ITALIAN = json.loads((ASSETS / "italian.json").read_text(encoding="utf-8"))
 SETTINGS = Path(os.getenv("APPDATA") or os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config") / "NTRIP Scope" / "settings.json"
@@ -61,6 +63,7 @@ class Client:
         self.baud = tk.StringVar(value="115200")
         self.send_rover = tk.BooleanVar()
         self.raw_gga = tk.StringVar()
+        self.imported_outputs = Outputs()
         self.height = tk.StringVar()
         self.geoid = tk.StringVar()
         self.axes = [[tk.StringVar() for _ in range(4)] + [tk.StringVar(value=hemisphere)]
@@ -210,7 +213,47 @@ class Client:
         serial.grid(row=5,column=1,sticky="ew")
         ttk.Button(frame,text=self.tr("Refresh"),command=lambda:serial.configure(values=[p.device for p in comports()])).grid(row=5,column=2,padx=4)
         row(6,"Baud rate",ttk.Combobox(frame,textvariable=self.baud,values=(4800,9600,19200,38400,57600,115200,230400)))
+        ttk.Button(frame,text=self.tr("Load configuration…"),command=lambda:self.load_config(win)).grid(row=7,column=0,pady=(10,0),sticky="w")
         ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("options")).grid(row=7,column=2,pady=(10,0))
+
+    def load_config(self, win):
+        if self.worker:
+            return
+        filename = filedialog.askopenfilename(parent=win, filetypes=[("INI", "*.ini"), ("All files", "*")])
+        if not filename:
+            return
+        if self.import_config(filename, win):
+            self.close_window("options")
+
+    def import_config(self, filename, win):
+        try:
+            parsed = settings(Path(filename))
+            # The desktop user chooses Connect or Fetch mountpoints explicitly.
+            flags = ["--config", filename, "--no-list", "--stdout"]
+            if not parsed.get("mountpoint"):
+                flags += ["--mountpoint", "placeholder"]
+            config, outputs, _, _, rover, _ = cli_arguments(flags)
+        except (INIError, OSError, ValueError, SystemExit):
+            messagebox.showerror("NTRIP Scope", self.tr("Invalid INI configuration"), parent=win)
+            return False
+        self.host.set(config.host); self.port.set(str(config.port))
+        self.mount.set(parsed.get("mountpoint", "")); self.user.set(config.username)
+        self.password.set(config.password); self.tls.set(config.tls); self.version.set(str(config.version))
+        self.imported_outputs = outputs
+        self.record.set(bool(outputs.files)); self.output.set(outputs.files[0] if outputs.files else "")
+        self.tcp.set(bool(outputs.tcp_ports)); self.tcp_port.set(str(outputs.tcp_ports[0]) if outputs.tcp_ports else "5000")
+        self.serial.set(bool(outputs.serial_ports))
+        device, baud = outputs.serial_ports[0] if outputs.serial_ports else ("", 115200)
+        self.serial_port.set(device); self.baud.set(str(baud))
+        self.send_rover.set(rover is not None); self.raw_gga.set("")
+        for axis, key in enumerate(("latitude", "longitude")):
+            self.axes[axis][0].set(str(parsed[key]) if key in parsed else "")
+            self.convert(axis, True, True)
+        self.height.set(str(parsed.get("height", 0))); self.geoid.set(str(parsed.get("geoid", 0)))
+        self.status = "Configuration loaded"
+        if any(len(items) > 1 for items in (outputs.files, outputs.tcp_ports, outputs.serial_ports)):
+            messagebox.showinfo("NTRIP Scope", self.tr("Additional INI destinations stay active when their first destination is unchanged."), parent=win)
+        return True
 
     def rover(self, win):
         frame = ttk.Frame(win,padding=14)
@@ -392,13 +435,20 @@ class Client:
             file=self.output.get() if self.record.get() and not list_only else ""
             if self.record.get() and not list_only and not file:
                 raise ValueError("Choose an output file")
-            if file and Path(file).exists() and not messagebox.askyesno("NTRIP Scope",self.tr("Overwrite the selected file?"),parent=self.root):
-                return
             serial=self.serial_port.get() if self.serial.get() and not list_only else ""
             if self.serial.get() and not list_only and not serial:
                 raise ValueError("Select a serial port")
             config=Connection(host,port,mount,self.user.get(),self.password.get(),self.tls.get(),
                               int(self.version.get()),file,tcp,serial,int(self.baud.get()) if serial else 115200)
+            extra = self.imported_outputs
+            serial_entry = (serial, config.baud)
+            files = extra.files if file and extra.files[:1] == (file,) else ((file,) if file else ())
+            tcp_ports = extra.tcp_ports if tcp and extra.tcp_ports[:1] == (tcp,) else ((tcp,) if tcp else ())
+            serial_ports = extra.serial_ports if serial and extra.serial_ports[:1] == (serial_entry,) else ((serial_entry,) if serial else ())
+            outputs = Outputs(files, tcp_ports, serial_ports)
+            if any(Path(path).exists() for path in files) and not messagebox.askyesno(
+                    "NTRIP Scope", self.tr("Overwrite existing output files?"), parent=self.root):
+                return
             sentence=None
             if not list_only and self.send_rover.get():
                 lat,lon=self.values
@@ -431,7 +481,7 @@ class Client:
                     continue
         def worker():
             try:
-                run(config,self.stopped,emit,list_only=list_only,gga=sentence)
+                run(config,self.stopped,emit,list_only=list_only,gga=sentence,outputs=outputs)
             except Cancelled:
                 pass
             except Exception as error:
@@ -517,6 +567,21 @@ def main():
         client.open("live","Live stream",client.monitor)
         client.open("options","Options",client.options)
         client.open("map","Map & sky",client.map_window)
+        if len(sys.argv) == 3:
+            original_dialog = filedialog.askopenfilename
+            original_info = messagebox.showinfo
+            try:
+                filedialog.askopenfilename = lambda **kwargs: sys.argv[2]
+                messagebox.showinfo = lambda *args, **kwargs: None
+                client.load_config(client.windows["options"])
+            finally:
+                filedialog.askopenfilename = original_dialog
+                messagebox.showinfo = original_info
+            assert "options" not in client.windows
+            assert client.host.get() == "caster.example.org" and client.mount.get() == "VRS"
+            assert client.send_rover.get() and tuple(client.values) == (46.125, 13.333333)
+            assert client.height.get() == "100.0" and client.tcp_port.get() == "5000"
+            assert client.imported_outputs.files == ("corrections.rtcm", "second-copy.rtcm")
         root.after(400,root.destroy)
     root.mainloop()
     if failures:

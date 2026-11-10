@@ -19,9 +19,9 @@ def main():
         if sys.platform == "win32":
             # Vista+ ICO files can embed a PNG directly.
             from PIL import Image
-            with Image.open(root / "assets/orbit.png") as source:
+            with Image.open(root / "assets/orbit.png") as image:
                 png = Path(folder) / "orbit.png"
-                source.resize((256, 256), Image.Resampling.LANCZOS).save(png)
+                image.resize((256, 256), Image.Resampling.LANCZOS).save(png)
             data = png.read_bytes()
             icon = Path(folder) / "orbit.ico"
             icon.write_bytes(struct.pack("<HHHBBBBHHII", 0, 1, 1, 0, 0, 0, 0, 1, 32, len(data), 22) + data)
