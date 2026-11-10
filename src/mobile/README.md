@@ -36,15 +36,42 @@ flutter build apk --debug
 
 L'APK di prova si trova in `build/app/outputs/flutter-apk/app-debug.apk`. Per uno store occorre configurare la firma di distribuzione.
 
-### iOS
+### iPhone e iPad
 
-Configurare [l'ambiente iOS di Flutter](https://docs.flutter.dev/platform-integration/ios/setup) con Xcode completo. Per compilare senza firma per il simulatore:
+NTRIP Scope richiede iOS o iPadOS 15 o successivo. La versione di sviluppo si installa dal Mac con Xcode. Per provare l’app sul proprio dispositivo si può usare un normale account Apple e scegliere **Personal Team** in Xcode.
+
+1. Installa Flutter e Xcode completo. Apri Xcode e scarica il componente iOS da **Xcode → Settings → Components**. In **Settings → Locations → Command Line Tools**, seleziona Xcode. [Configurazione Flutter per iOS](https://docs.flutter.dev/platform-integration/ios/setup)
+2. Clona il repository e prepara le dipendenze dalla cartella del progetto mobile.
+
+   ```sh
+   git clone https://github.com/zuliani71/NTRIP-Scope.git
+   cd NTRIP-Scope/src/mobile
+   flutter pub get
+   flutter build ios --config-only
+   open ios/Runner.xcworkspace
+   ```
+
+3. Collega il dispositivo al Mac con un cavo dati, sbloccalo e conferma **Autorizza questo computer?** se richiesto. Controlla che compaia nel Finder sotto **Posizioni** e in Xcode sotto **Window → Devices and Simulators**.
+4. In **Xcode → Settings → Accounts** aggiungi il tuo account Apple. Nel progetto **Runner**, seleziona **TARGETS → Runner → Signing & Capabilities**, attiva **Automatically manage signing** e scegli il tuo **Personal Team**. Se Xcode segnala che l’identificativo dell’app è già in uso, modifica **Bundle Identifier** con un identificativo univoco per la tua build.
+5. Scegli l’iPhone o l’iPad come destinazione. Se Xcode richiede la **Modalità sviluppatore**, sul dispositivo vai in **Impostazioni → Privacy e sicurezza → Modalità sviluppatore**, attivala, riavvia e conferma dopo il riavvio. [Guida Apple alla modalità sviluppatore](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)
+6. Premi **Run ▶**. Se il Portachiavi del Mac chiede a `codesign` di usare la chiave **Apple Development**, autorizza la richiesta nella finestra di sistema. A installazione completata, apri **NTRIP Scope**.
+7. Se il dispositivo segnala **Sviluppatore non autorizzato**, vai in **Impostazioni → Generali → VPN e gestione dispositivo**. Se compare la sezione **App sviluppatore**, seleziona il profilo del tuo account e autorizzalo seguendo le indicazioni di iOS. Riapri l’app.
+
+Per provare l’app sul simulatore senza configurare la firma, installa il runtime iOS da Xcode e usa:
 
 ```sh
 BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter build ios --simulator
 ```
 
-Per installare su iPhone, selezionare il proprio team di firma per il target Runner in Xcode e usare `BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter run -d <device>`.
+#### Risoluzione dei problemi
+
+| Sintomo | Controllo |
+|---|---|
+| Il dispositivo è collegato ma non compare in Xcode | Verifica prima il Finder. Sblocca il dispositivo, prova una porta diretta del Mac e usa un cavo dati. Dopo un riavvio, se necessario scollega e ricollega il cavo. [Guida Apple](https://support.apple.com/it-it/108643) |
+| `PhaseScriptExecution failed` | Apri il log della build e leggi la prima riga di errore. Se cita `objective_c`, `sdkPath` o `Bad state: No element`, verifica che in **Settings → Locations** sia selezionato Xcode completo e che il componente iOS sia installato. Esegui di nuovo `flutter pub get` se Xcode non trova i plugin Flutter. |
+| `invalid reuse after initialization failure` | Chiudi e riapri il workspace, poi usa **Product → Clean Build Folder** e riprova. Una compilazione con una cartella di build nuova ha superato questo errore durante la prova. |
+| `errSecInternalComponent` durante la firma | Verifica il **Team** e controlla se il Portachiavi attende il consenso per **Apple Development**. |
+| L’app si installa ma iOS ne blocca l’apertura | Se iOS indica uno sviluppatore non autorizzato, controlla il profilo come al punto 7. Se il profilo manca o l’errore persiste, verifica certificato, firma e profilo in Xcode. |
 
 ## Licenza
 
