@@ -17,6 +17,25 @@ Choose the package for your system from the [v1.10 release](https://github.com/z
 
 On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux binaries target Ubuntu 22.04 or compatible systems.
 
+## Command-line client
+
+Download [ntripscope.zip](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/ntripscope.zip)
+and extract it on macOS, Windows or Linux. It requires Python 3.10 or later.
+From the extracted folder, run:
+
+```sh
+python3 ntripscope.py --host caster.example.org --port 2101 --list
+python3 ntripscope.py --config ntripscope-vrs.example.ini
+```
+
+The default output is binary RTCM on stdout. Use the repeatable `--file`,
+`--tcp` and `--serial` options to forward the stream to multiple destinations.
+See the [CLI guide and full INI syntax](src/portable/ntripscope.md), the
+[basic example](src/portable/ntrip-scope.example.ini) and the
+[VRS example](src/portable/ntripscope-vrs.example.ini).
+Build a standalone executable on the target system with
+`python src/portable/build.py --cli` after installing the build requirements.
+
 ## Screenshots
 
 | Live NTRIP connection | Rover and mountpoint map |

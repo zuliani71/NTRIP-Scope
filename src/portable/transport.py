@@ -23,6 +23,13 @@ class Connection:
     baud: int = 115200
 
 
+@dataclass(frozen=True)
+class Outputs:
+    files: tuple[str, ...] = ()
+    tcp_ports: tuple[int, ...] = ()
+    serial_ports: tuple[tuple[str, int], ...] = ()
+
+
 class Cancelled(Exception):
     pass
 
@@ -132,7 +139,7 @@ def request(config, list_only, gga):
     return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
 
 
-def run(config, stopped, emit, *, list_only=False, gga=None):
+def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
     with ExitStack() as resources:
         sock = resources.enter_context(socket.create_connection((config.host, config.port), timeout=5))
         if config.tls:
@@ -174,44 +181,55 @@ def run(config, stopped, emit, *, list_only=False, gga=None):
             sock.sendall((gga() + "\r\n").encode("ascii"))
             stream.gga, stream.next_gga = gga, time.monotonic() + 10
 
-        device = None
-        if config.serial:
+        if outputs is None:
+            outputs = Outputs(
+                (config.file,) if config.file else (),
+                (config.tcp,) if config.tcp else (),
+                ((config.serial, config.baud),) if config.serial else (),
+            )
+        devices = []
+        if outputs.serial_ports:
             import serial
-            device = resources.enter_context(serial.Serial(config.serial, config.baud, write_timeout=1))
-        listener = None
-        if config.tcp:
+            for port, baud in outputs.serial_ports:
+                devices.append(resources.enter_context(serial.Serial(port, baud, write_timeout=1)))
+        listeners = {}
+        for port in outputs.tcp_ports:
             listener = resources.enter_context(socket.socket())
-            listener.bind(("127.0.0.1", config.tcp))
+            listener.bind(("127.0.0.1", port))
             listener.listen(1)
             listener.setblocking(False)
-            emit("output", f"TCP 127.0.0.1:{config.tcp}")
-        output = resources.enter_context(open(config.file, "wb", buffering=0)) if config.file else None
-        if device:
-            emit("output", config.serial)
+            listeners[listener] = None
+        files = [resources.enter_context(open(path, "wb")) for path in outputs.files]
+        for port in outputs.tcp_ports:
+            emit("output", f"TCP 127.0.0.1:{port}")
+        for port, _ in outputs.serial_ports:
+            emit("output", port)
         emit("status", "Connected, waiting for data…")
-        peer = None
         try:
             for block in stream.body(headers):
                 if stopped.is_set():
                     raise Cancelled
-                if output:
+                for output in files:
                     output.write(block)
-                if device:
+                    output.flush()
+                for device in devices:
                     device.write(block)
-                if listener and peer is None:
-                    try:
-                        peer, _ = listener.accept()
-                        peer.settimeout(0.2)
-                    except BlockingIOError:
-                        pass
-                if peer:
+                for listener, peer in listeners.items():
+                    if peer is None:
+                        try:
+                            peer, _ = listener.accept()
+                            peer.settimeout(0.2)
+                            listeners[listener] = peer
+                        except BlockingIOError:
+                            continue
                     try:
                         peer.sendall(block)
                     except OSError:
                         peer.close()
-                        peer = None
+                        listeners[listener] = None
                 emit("data", block)
         finally:
-            if peer:
-                peer.close()
+            for peer in listeners.values():
+                if peer:
+                    peer.close()
         emit("status", "Connection closed by caster")

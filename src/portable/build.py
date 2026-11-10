@@ -9,6 +9,11 @@ from pathlib import Path
 def main():
     source = Path(__file__).resolve().parent
     root = source.parents[1]
+    if sys.argv[1:] == ["--cli"]:
+        subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
+                        "--name", "ntripscope", "--collect-submodules", "serial",
+                        str(source / "ntripscope.py")], cwd=root, check=True)
+        return
     with tempfile.TemporaryDirectory() as folder:
         options = []
         if sys.platform == "win32":
