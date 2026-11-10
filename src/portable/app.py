@@ -1,5 +1,5 @@
 """NTRIP Scope portable desktop client."""
-from configparser import Error as INIError
+from configparser import ConfigParser, Error as INIError
 import json
 import os
 import queue
@@ -7,13 +7,14 @@ import sys
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from charts import ASSETS, BG, MapSky, cnr_chart
 from gnss import Decoder, dms, fields, from_dms, gga, observations
 from transport import Cancelled, Connection, Outputs, run
-from ntripscope import arguments as cli_arguments, settings
+from ntripscope import AUTHOR, PROJECT_URL, VERSION, arguments as cli_arguments, settings
 
 ITALIAN = json.loads((ASSETS / "italian.json").read_text(encoding="utf-8"))
 SETTINGS = Path(os.getenv("APPDATA") or os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config") / "NTRIP Scope" / "settings.json"
@@ -102,6 +103,12 @@ class Client:
     def build(self):
         for child in self.main.winfo_children():
             child.destroy()
+        menu = tk.Menu(self.root)
+        help_menu = tk.Menu(menu, tearoff=False)
+        help_menu.add_command(label=self.tr("About NTRIP Scope"),
+                              command=lambda: self.open("about", "About NTRIP Scope", self.about))
+        menu.add_cascade(label=self.tr("Help"), menu=help_menu)
+        self.root.configure(menu=menu)
         top = ttk.Frame(self.main)
         top.pack(fill="x", pady=(0, 12))
         ttk.Label(top, text="NTRIP Scope", font=("TkDefaultFont", 19, "bold")).pack(side="left")
@@ -178,6 +185,17 @@ class Client:
             pass
         self.root.destroy()
 
+    def about(self, win):
+        frame = ttk.Frame(win, padding=20)
+        frame.pack(fill="both", expand=True)
+        for line in ("NTRIP Scope", f"{self.tr('Version')} {VERSION}", AUTHOR,
+                     self.tr("Software: MIT License"),
+                     self.tr("Original published project materials: CC BY 4.0 unless indicated otherwise."),
+                     PROJECT_URL):
+            ttk.Label(frame, text=line, wraplength=410).pack(anchor="w", pady=3)
+        ttk.Button(frame, text=self.tr("Open on GitHub"),
+                   command=lambda: webbrowser.open(PROJECT_URL)).pack(anchor="w", pady=(10, 0))
+
     def options(self, win):
         from serial.tools.list_ports import comports
 
@@ -214,7 +232,70 @@ class Client:
         ttk.Button(frame,text=self.tr("Refresh"),command=lambda:serial.configure(values=[p.device for p in comports()])).grid(row=5,column=2,padx=4)
         row(6,"Baud rate",ttk.Combobox(frame,textvariable=self.baud,values=(4800,9600,19200,38400,57600,115200,230400)))
         ttk.Button(frame,text=self.tr("Load configuration…"),command=lambda:self.load_config(win)).grid(row=7,column=0,pady=(10,0),sticky="w")
+        ttk.Button(frame,text=self.tr("Save configuration…"),command=lambda:self.save_config(win)).grid(row=7,column=1,pady=(10,0),sticky="w")
         ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("options")).grid(row=7,column=2,pady=(10,0))
+
+    def configured_outputs(self, file, tcp, serial, baud):
+        extra = self.imported_outputs
+        serial_entry = (serial, baud)
+        files = extra.files if file and extra.files[:1] == (file,) else ((file,) if file else ())
+        ports = extra.tcp_ports if tcp and extra.tcp_ports[:1] == (tcp,) else ((tcp,) if tcp else ())
+        devices = extra.serial_ports if serial and extra.serial_ports[:1] == (serial_entry,) else ((serial_entry,) if serial else ())
+        return Outputs(files, ports, devices)
+
+    def save_config(self, win):
+        ini = ConfigParser(interpolation=None)
+        try:
+            host = self.host.get().strip()
+            port = int(self.port.get())
+            if not host or not 1 <= port <= 65535 or any(c.isspace() or c in "/?#" for c in host):
+                raise ValueError("Invalid caster or port")
+            ini["caster"] = {
+                "host": host, "port": str(port), "mountpoint": self.mount.get().strip(),
+                "username": self.user.get(), "version": self.version.get(),
+                "tls": str(self.tls.get()).lower(),
+            }
+            if self.send_rover.get():
+                lat, lon = self.values
+                height = number(self.height.get())
+                geoid = number(self.geoid.get().strip() or "0")
+                if lat is None or lon is None or not abs(height) < 100000 or not abs(geoid) < 100000:
+                    raise ValueError("Invalid coordinates")
+                ini["rover"] = dict(latitude=f"{lat:.6f}", longitude=f"{lon:.6f}",
+                                    height=f"{height:.3f}", geoid=f"{geoid:.3f}")
+            elif self.raw_gga.get().strip():
+                raise ValueError("Enter rover coordinates to export GGA settings")
+            file = self.output.get() if self.record.get() else ""
+            tcp = int(self.tcp_port.get()) if self.tcp.get() else 0
+            serial = self.serial_port.get() if self.serial.get() else ""
+            baud = int(self.baud.get()) if serial else 115200
+            if self.record.get() and not file:
+                raise ValueError("Choose an output file")
+            if self.tcp.get() and not 1 <= tcp <= 65535:
+                raise ValueError("Invalid TCP output port")
+            if self.serial.get() and (not serial or baud <= 0):
+                raise ValueError("Select a serial port")
+            outputs = self.configured_outputs(file, tcp, serial, baud)
+            values = [*ini["caster"].values(), *outputs.files, *(device for device, _ in outputs.serial_ports)]
+            if any("\n" in value or "\r" in value for value in values):
+                raise ValueError("INI values must fit on one line")
+            destinations = {
+                "file": "\n".join(outputs.files),
+                "tcp": "\n".join(map(str, outputs.tcp_ports)),
+                "serial": "\n".join(f"{device}:{speed}" for device, speed in outputs.serial_ports),
+            }
+            if any(destinations.values()):
+                ini["outputs"] = {key: value for key, value in destinations.items() if value}
+            filename = filedialog.asksaveasfilename(parent=win, initialfile="ntripscope.ini",
+                                                    defaultextension=".ini", filetypes=[("INI", "*.ini")])
+            if filename:
+                with Path(filename).open("w", encoding="utf-8") as stream:
+                    ini.write(stream)
+                message = "Configuration saved without password" if self.password.get() else "Configuration saved"
+                self.status = message
+                messagebox.showinfo("NTRIP Scope", self.tr(message), parent=win)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("NTRIP Scope", self.tr(str(error)), parent=win)
 
     def load_config(self, win):
         if self.worker:
@@ -440,12 +521,8 @@ class Client:
                 raise ValueError("Select a serial port")
             config=Connection(host,port,mount,self.user.get(),self.password.get(),self.tls.get(),
                               int(self.version.get()),file,tcp,serial,int(self.baud.get()) if serial else 115200)
-            extra = self.imported_outputs
-            serial_entry = (serial, config.baud)
-            files = extra.files if file and extra.files[:1] == (file,) else ((file,) if file else ())
-            tcp_ports = extra.tcp_ports if tcp and extra.tcp_ports[:1] == (tcp,) else ((tcp,) if tcp else ())
-            serial_ports = extra.serial_ports if serial and extra.serial_ports[:1] == (serial_entry,) else ((serial_entry,) if serial else ())
-            outputs = Outputs(files, tcp_ports, serial_ports)
+            outputs = self.configured_outputs(file, tcp, serial, config.baud)
+            files = outputs.files
             if any(Path(path).exists() for path in files) and not messagebox.askyesno(
                     "NTRIP Scope", self.tr("Overwrite existing output files?"), parent=self.root):
                 return

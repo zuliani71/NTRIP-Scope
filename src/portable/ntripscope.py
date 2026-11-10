@@ -11,6 +11,10 @@ import threading
 from nmea import gga
 from transport import Cancelled, Connection, Outputs, run
 
+VERSION = "1.13"
+AUTHOR = "David Zuliani (zuliani71)"
+PROJECT_URL = "https://github.com/zuliani71/NTRIP-Scope"
+
 SCHEMA = {
     "caster": {"host": str, "port": int, "mountpoint": str, "username": str,
                "password": str, "tls": bool, "version": int, "list": bool},
@@ -62,9 +66,13 @@ def serial_destination(value):
 
 
 def arguments(argv):
+    if list(sys.argv[1:] if argv is None else argv) == ["--version"]:
+        argv = ["--app-version"]
     parser = argparse.ArgumentParser(prog="ntripscope",
         description="Receive raw RTCM from an NTRIP caster or list its mountpoints.",
+        epilog=f"Author: {AUTHOR}. Project: {PROJECT_URL}",
         argument_default=argparse.SUPPRESS)
+    parser.add_argument("--app-version", action="version", version=f"%(prog)s {VERSION}")
     parser.add_argument("--config", type=Path, help="UTF-8 INI configuration file")
     parser.add_argument("--host", "--ip", help="Caster IP address or hostname")
     parser.add_argument("--port", type=int, help="Caster port (default: 2101)")

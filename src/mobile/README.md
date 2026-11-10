@@ -16,6 +16,18 @@ L'importazione carica le sezioni `[caster]` e `[rover]`. Il file può contenere 
 
 Un [INI VRS di esempio](assets/ntripscope-vrs.example.ini) è incluso nel progetto. Sostituire il caster e il mountpoint prima dell'uso.
 
+Il pulsante **ⓘ** nella barra superiore mostra autore, versione, licenza e collegamento al repository GitHub.
+
+## Uscite RTCM su Android
+
+In **Connection → Stream outputs** si possono attivare più destinazioni prima di premere **Connect**.
+
+- **Write RTCM to file** apre il selettore Android. Durante la sessione scrive i byte nel documento scelto. Una nuova connessione con la stessa destinazione riparte dall’inizio del file.
+- **TCP server** ascolta sulla porta impostata, inizialmente 5000, per un client alla volta. Di default accetta collegamenti dal telefono su `127.0.0.1`. Per un computer sulla stessa rete, attiva **Allow clients on the local network** e usa l’indirizzo IP del telefono. L’uscita TCP è in chiaro e senza autenticazione. Il ricevitore riceve i byte che arrivano dopo il suo collegamento.
+- **Bluetooth Classic (SPP)** invia RTCM a un ricevitore abbinato in Android. Il ricevitore deve accettare dati sul profilo seriale SPP. Se Android lo richiede, consenti l’accesso ai dispositivi nelle vicinanze.
+
+La cattura temporanea **Record RTCM** e il decoder rimangono disponibili. Le uscite si chiudono quando si interrompe la sessione o si passa in background. USB-seriale e Bluetooth Low Energy sono possibilità per versioni future.
+
 ## Compilazione e prove
 
 Il progetto contiene entrambi i target. È stato generato con Flutter 3.47.9.

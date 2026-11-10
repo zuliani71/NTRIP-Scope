@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'config.dart';
 import 'ntrip.dart';
+import 'outputs.dart';
 import 'rtcm.dart';
 
 void main() => runApp(const ScopeApp());
@@ -47,6 +50,14 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   final rtcmRevision = ValueNotifier<int>(0);
   NtripSession? session;
   File? capture;
+  StreamOutputs? activeOutputs;
+  String? fileUri;
+  String? bluetoothAddress;
+  String? bluetoothName;
+  String? outputNotice;
+  final tcpPort = TextEditingController(text: '5000');
+  bool forwardTcp = false;
+  bool allowNetwork = false;
   List<String> mountpoints = [];
   Map<String, String> desktopOutputs = const {};
   Timer? redraw;
@@ -67,13 +78,14 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) session?.stop();
+    if (state == AppLifecycleState.paused) stopSession();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    session?.stop();
+    stopSession();
+    tcpPort.dispose();
     redraw?.cancel();
     rtcmRevision.dispose();
     for (final field in [
@@ -97,6 +109,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   }
 
   String errorText(Object error) {
+    if (error is PlatformException) return error.message ?? error.code;
     if (error is FormatException) return error.message;
     if (error is TimeoutException)
       return 'No response from caster within the timeout';
@@ -226,12 +239,86 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     }
   }
 
+  void outputStatus(String message) {
+    if (mounted) setState(() => outputNotice = message);
+  }
+
+  void stopSession() {
+    session?.stop();
+    final outputs = activeOutputs;
+    if (outputs != null)
+      unawaited(
+        outputs.close().catchError((Object error) {
+          outputStatus(errorText(error));
+        }),
+      );
+  }
+
+  Future<void> chooseOutputFile() async {
+    setState(() => readingSettings = true);
+    try {
+      final uri = await StreamOutputs.channel.invokeMethod<String>(
+        'chooseFile',
+      );
+      if (mounted && uri != null) setState(() => fileUri = uri);
+    } catch (error) {
+      outputStatus(errorText(error));
+    } finally {
+      if (mounted) setState(() => readingSettings = false);
+    }
+  }
+
+  Future<void> chooseBluetooth() async {
+    setState(() => readingSettings = true);
+    try {
+      final devices =
+          await StreamOutputs.channel.invokeListMethod<Map>('pairedDevices') ??
+          [];
+      if (!mounted) return;
+      if (devices.isEmpty) {
+        outputStatus(
+          'Pair a Bluetooth Classic SPP receiver in Android settings',
+        );
+        return;
+      }
+      final selected = await showDialog<Map>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('Paired Bluetooth devices'),
+          children: [
+            for (final device in devices)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, device),
+                child: Text(device['name'] as String),
+              ),
+          ],
+        ),
+      );
+      if (mounted && selected != null)
+        setState(() {
+          bluetoothAddress = selected['address'] as String;
+          bluetoothName = selected['name'] as String;
+        });
+    } catch (error) {
+      outputStatus(errorText(error));
+    } finally {
+      if (mounted) setState(() => readingSettings = false);
+    }
+  }
+
   Future<void> run({required bool list}) async {
     if (busy) return;
     FocusScope.of(context).unfocus();
     Caster config;
+    int? listenPort;
     try {
       config = currentConfig(list: list);
+      if (!list && forwardTcp) {
+        listenPort = int.tryParse(tcpPort.text.trim());
+        if (listenPort == null || listenPort < 1 || listenPort > 65535) {
+          throw const FormatException('Choose a TCP port between 1 and 65535');
+        }
+      }
       if (!list && config.mount.replaceAll('/', '').isEmpty) {
         throw const FormatException('Choose a mountpoint');
       }
@@ -243,6 +330,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     setState(() {
       session = active;
       status = list ? 'Fetching mountpoints…' : 'Connecting…';
+      outputNotice = null;
       if (!list) {
         decoder = RtcmDecoder();
         preview.clear();
@@ -261,6 +349,20 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           });
         }
       } else {
+        final destinations = StreamOutputs(outputStatus);
+        activeOutputs = destinations;
+        await destinations.open(
+          file: fileUri,
+          port: listenPort,
+          network: allowNetwork,
+          bluetooth: bluetoothAddress,
+        );
+        if (active.stopped) return;
+        if (listenPort != null) {
+          outputStatus(
+            'TCP listening on ${allowNetwork ? 'the local network' : '127.0.0.1'}:${destinations.tcpPort}',
+          );
+        }
         if (record) {
           final folder = await getTemporaryDirectory();
           pending = File(
@@ -270,6 +372,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         }
         await for (final bytes in active.stream(config)) {
           if (!mounted) break;
+          await destinations.write(bytes);
           if (output != null) await output.writeFrom(bytes);
           if (!mounted) break;
           count += bytes.length;
@@ -298,6 +401,13 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       active.stop();
       redraw?.cancel();
       redraw = null;
+      final destinations = activeOutputs;
+      activeOutputs = null;
+      try {
+        await destinations?.close();
+      } catch (error) {
+        outputStatus(errorText(error));
+      }
       try {
         await output?.close();
         if (pending != null && await pending.length() > 0) {
@@ -356,6 +466,47 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     if (mountpoints.isNotEmpty) setState(() => mountpoints = []);
   }
 
+  Future<void> showProjectInfo() async {
+    final package = await PackageInfo.fromPlatform();
+    if (!mounted) return;
+    final project = Uri.https('github.com', '/zuliani71/NTRIP-Scope');
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('About NTRIP Scope'),
+        content: SingleChildScrollView(
+          child: Text(
+            'Version ${package.version} (build ${package.buildNumber})\n'
+            'David Zuliani (zuliani71)\n\n'
+            'Software: MIT License\n'
+            'Original published project materials: CC BY 4.0 unless indicated otherwise.\n\n'
+            '$project',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (!await launchUrl(
+                    project,
+                    mode: LaunchMode.externalApplication,
+                  ) &&
+                  context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Could not open GitHub')),
+                );
+              }
+            },
+            child: const Text('Open on GitHub'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => DefaultTabController(
     length: 3,
@@ -371,6 +522,13 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
             const Text('NTRIP Scope'),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'About NTRIP Scope',
+            onPressed: showProjectInfo,
+            icon: const Icon(Icons.info_outline),
+          ),
+        ],
         bottom: const TabBar(
           tabs: [
             Tab(text: 'Connection'),
@@ -395,7 +553,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
                   ? null
                   : TextButton(
                       onPressed: () {
-                        session?.stop();
+                        stopSession();
                         redraw?.cancel();
                         redraw = null;
                         showStatus('Disconnecting…');
@@ -545,6 +703,12 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           label: const Text('Use phone latitude and longitude'),
         ),
       ],
+      if (Platform.isAndroid) androidOutputs(),
+      if (outputNotice != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(outputNotice!),
+        ),
       CheckboxListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('Record RTCM'),
@@ -572,6 +736,66 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
               ),
             ),
         ],
+      ),
+    ],
+  );
+
+  Widget androidOutputs() => ExpansionTile(
+    tilePadding: EdgeInsets.zero,
+    title: const Text('Stream outputs'),
+    children: [
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Write RTCM to file'),
+        subtitle: Text(
+          fileUri == null
+              ? 'Off'
+              : 'Destination selected. Replaced at connection.',
+        ),
+        onTap: busy ? null : chooseOutputFile,
+        trailing: fileUri == null
+            ? null
+            : IconButton(
+                tooltip: 'Disable file output',
+                onPressed: busy ? null : () => setState(() => fileUri = null),
+                icon: const Icon(Icons.clear),
+              ),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('TCP server'),
+        value: forwardTcp,
+        onChanged: busy ? null : (value) => setState(() => forwardTcp = value),
+      ),
+      if (forwardTcp) ...[
+        field(tcpPort, 'TCP port', numeric: true),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Allow clients on the local network'),
+          subtitle: const Text('TCP output has no authentication'),
+          value: allowNetwork,
+          onChanged: busy
+              ? null
+              : (value) => setState(() => allowNetwork = value),
+        ),
+      ],
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Bluetooth Classic (SPP)'),
+        subtitle: Text(bluetoothName ?? 'Off · select a paired receiver'),
+        onTap: busy ? null : chooseBluetooth,
+        trailing: bluetoothAddress == null
+            ? null
+            : IconButton(
+                tooltip: 'Disable Bluetooth output',
+                onPressed: busy
+                    ? null
+                    : () => setState(() {
+                        bluetoothAddress = null;
+                        bluetoothName = null;
+                      }),
+                icon: const Icon(Icons.clear),
+              ),
       ),
     ],
   );

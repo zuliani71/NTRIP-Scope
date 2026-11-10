@@ -8,20 +8,20 @@ NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a 
 
 ### Desktop client
 
-Choose the package for your system from the [v1.10 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.10). To use the desktop INI importer, [build version 1.11 from source](#build-and-test).
+Choose the package for your system from the [v1.13 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.13).
 
 | Platform | Package |
 |---|---|
-| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-macos-arm64.zip) |
-| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-windows-x64.zip) |
-| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-linux-arm64.tar.gz) |
-| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/NTRIP-Scope-linux-x64.tar.gz) |
+| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-macos-arm64-1.13.zip) |
+| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-windows-x64-1.13.zip) |
+| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-linux-arm64-1.13.tar.gz) |
+| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-linux-x64-1.13.tar.gz) |
 
-On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux binaries target Ubuntu 22.04 or compatible systems.
+On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux x64 build targets Ubuntu 22.04 or compatible systems. The Linux ARM64 build targets Ubuntu 24.04 or compatible systems.
 
 ### Command-line client
 
-Download [ntripscope.zip](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.10/ntripscope.zip)
+Download [ntripscope-1.13.zip](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/ntripscope-1.13.zip)
 and extract it on macOS, Windows or Linux. It requires Python 3.10 or later.
 From the extracted folder, run:
 
@@ -40,15 +40,22 @@ Build a standalone executable on the target system with
 
 ### Android client
 
-[Download the Android 0.1.2 preview APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.2/NTRIP-Scope-Android-0.1.2-debug.apk). It requires Android 7.0 or later. Open the downloaded APK on your phone to install it. Android may ask you to allow installation from the app you used to open the file.
+[Download the Android 0.1.4 preview APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.4/NTRIP-Scope-Android-0.1.4-debug.apk). It requires Android 7.0 or later. Open the downloaded APK on your phone to install it. Android may ask you to allow installation from the app you used to open the file.
 
 The Android client runs in the foreground and supports mountpoint discovery, rover GGA for VRS, live HEX and ASCII, RTCM3 decoding, and capture export. It can load and save the same INI format used by the desktop and command-line clients. See the [mobile source and build instructions](src/mobile/README.md).
+
+- **File output** writes RTCM directly to a document selected before connecting.
+- **TCP server** streams RTCM to one client at a time. It listens on the phone only by default, with an option to accept clients on the local network.
+- **Bluetooth Classic (SPP)** forwards RTCM to a paired receiver. File and TCP were tested together in the emulator. Bluetooth byte forwarding was tested with a simulated platform channel, with physical SPP validation pending.
+- **About** displays the installed version, author, license and GitHub link.
+
+Outputs can run together while RTCM3 diagnostics remain available. USB serial is planned.
 
 ### iPhone and iPad client
 
 The development preview supports iOS and iPadOS 15 or later. Build and install it from source on your own device using Xcode and your Apple Account. The app has launched in the iPhone simulator and installed on a physical iPhone. The first launch on the physical device still needs verification.
 
-See the [installation and troubleshooting guide for iPhone and iPad](src/mobile/README.md#iphone-e-ipad).
+The [0.1.4 simulator build](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.4/NTRIP-Scope-iOS-0.1.4-Simulator.zip) includes the new About screen. For a physical device, see the [installation and troubleshooting guide for iPhone and iPad](src/mobile/README.md#iphone-e-ipad).
 
 ## Screenshots
 
@@ -75,11 +82,12 @@ The street map uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. 
 
 ## Share an INI configuration
 
-Starting with version 1.11, the desktop app can load the same file used by `ntripscope --config`.
+The desktop app can load the same file used by `ntripscope --config`.
 Choose **Options → Load configuration…** to populate the caster, mountpoint, credentials, rover coordinates for VRS, and file, TCP and serial outputs. Then choose **Connect** or **Fetch mountpoints**.
 The CLI settings `stdout` and `list` apply only to command-line runs.
 The macOS desktop app accepts multiple files, one TCP port and one serial device per session.
 Use a serial device name appropriate for the system where the configuration runs.
+Use **Options → Save configuration…** to export caster settings, rover coordinates and enabled desktop outputs. Enter the password again after loading an exported file.
 
 ## Source layout
 

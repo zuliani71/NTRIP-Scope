@@ -189,5 +189,16 @@
   "not transmitted": "non trasmesso",
   "synchronized": "sincronizzato",
   "yes": "sì",
-  "— marks missing or invalid measurements. Carrier phase is shown as equivalent range.": "— indica una misura assente o non valida. La fase è espressa come distanza equivalente."
+  "— marks missing or invalid measurements. Carrier phase is shown as equivalent range.": "— indica una misura assente o non valida. La fase è espressa come distanza equivalente.",
+  "Save configuration…": "Salva configurazione…",
+  "Configuration saved": "Configurazione salvata",
+  "Configuration saved without password": "Configurazione salvata senza password",
+  "Enter rover coordinates to export GGA settings": "Inserisci le coordinate del rover per esportare le impostazioni GGA",
+  "INI values must fit on one line": "I valori INI devono stare su una sola riga",
+  "Help": "Aiuto",
+  "About NTRIP Scope": "Informazioni su NTRIP Scope",
+  "Version": "Versione",
+  "Software: MIT License": "Software con licenza MIT",
+  "Original published project materials: CC BY 4.0 unless indicated otherwise.": "Materiali originali pubblicati dal progetto con licenza CC BY 4.0, salvo diversa indicazione.",
+  "Open on GitHub": "Apri su GitHub"
 }

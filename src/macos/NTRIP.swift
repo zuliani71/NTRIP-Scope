@@ -3,6 +3,7 @@ import Charts
 import SwiftUI
 import Network
 import Darwin
+import UniformTypeIdentifiers
 
 @MainActor
 final class Radio: ObservableObject {
@@ -724,11 +725,79 @@ struct RadioView: View {
             HStack {
                 Spacer()
                 Button(tr("Carica configurazione…")) { loadINI() }
+                Button(tr("Salva configurazione…")) { saveINI() }
                 Button(tr("Fine")) { showOptions = false }.keyboardShortcut(.cancelAction)
             }
         }
         .padding(20)
         .frame(width: 440, height: 340)
+    }
+
+    private func saveINI() {
+        do {
+            let casterHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !casterHost.isEmpty,
+                  !casterHost.contains(where: { $0.isWhitespace || "/?#".contains($0) }),
+                  let casterPort = Int(port), (1...65535).contains(casterPort) else {
+                throw INIConfiguration.Invalid(tr("Indirizzo o porta del caster non validi"))
+            }
+            let filePaths: [String]
+            if save {
+                guard let output else { throw INIConfiguration.Invalid(tr("Scegli file…")) }
+                let selected = output == importedFiles.first ? importedFiles : [output]
+                filePaths = selected.map(\.path)
+            } else { filePaths = [] }
+            let values = [casterHost, mount, user, device] + filePaths
+            guard !values.contains(where: { $0.contains(where: \.isNewline) }) else {
+                throw INIConfiguration.Invalid(tr("I valori INI devono stare su una sola riga"))
+            }
+            var lines = [
+                "[caster]", "host = \(casterHost)", "port = \(casterPort)", "mountpoint = \(mount)",
+                "username = \(user)", "version = \(version2 ? 2 : 1)", "tls = \(tls)",
+            ]
+            if roverDraft.enabled {
+                guard let rover = roverDraft.position else {
+                    throw INIConfiguration.Invalid(tr("Coordinate rover non valide"))
+                }
+                let locale = Locale(identifier: "en_US_POSIX")
+                lines += [
+                    "", "[rover]",
+                    String(format: "latitude = %.6f", locale: locale, rover.latitude),
+                    String(format: "longitude = %.6f", locale: locale, rover.longitude),
+                    String(format: "height = %.3f", locale: locale, rover.ellipsoidalHeight),
+                    String(format: "geoid = %.3f", locale: locale, rover.geoidSeparation),
+                ]
+            } else if !gga.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw INIConfiguration.Invalid(tr("Inserisci le coordinate del rover per esportare le impostazioni GGA"))
+            }
+            if save || tcp || serial { lines += ["", "[outputs]"] }
+            if let first = filePaths.first {
+                lines.append("file = \(first)")
+                lines += filePaths.dropFirst().map { "    \($0)" }
+            }
+            if tcp {
+                guard let port = Int(tcpPort), (1...65535).contains(port) else {
+                    throw INIConfiguration.Invalid(tr("Porta TCP non valida"))
+                }
+                lines.append("tcp = \(port)")
+            }
+            if serial {
+                guard !device.isEmpty, baud > 0 else { throw INIConfiguration.Invalid(tr("Scegli porta")) }
+                lines.append("serial = \(device):\(baud)")
+            }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = "ntripscope.ini"
+            if let type = UTType(filenameExtension: "ini") { panel.allowedContentTypes = [type] }
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+            radio.status = password.isEmpty ? "Configurazione salvata" : "Configurazione salvata senza password"
+            showOptions = false
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = tr("Impossibile salvare la configurazione")
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 
     private func loadINI() {
@@ -799,7 +868,6 @@ struct RadioView: View {
                     tls: tls, version2: version2, list: list, gga: roverDraft.enabled ? "" : gga,
                     output: save ? output : nil, tcpPort: tcp ? tcpPort : nil,
                     serialDevice: serial ? device : nil, baud: baud, rover: rover, additionalFiles: extra)
-        if !list && radio.busy && save { output = nil }
     }
 
     private func openMonitor() {
@@ -1083,10 +1151,33 @@ struct StreamMonitor: View {
 
 @main
 struct NTRIPDecoderClientApp: App {
+    @AppStorage(AppLanguage.key) private var language = "en"
+
+    private func showAbout() {
+        let italian = language == "it"
+        let project = URL(string: "https://github.com/zuliani71/NTRIP-Scope")!
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let alert = NSAlert()
+        alert.messageText = "NTRIP Scope"
+        let versionLabel = italian ? "Versione" : "Version"
+        let materials = italian
+            ? "Materiali originali pubblicati dal progetto con licenza CC BY 4.0, salvo diversa indicazione."
+            : "Original published project materials use CC BY 4.0 unless indicated otherwise."
+        alert.informativeText = "\(versionLabel) \(version)\nDavid Zuliani (zuliani71)\n\nSoftware MIT\n\(materials)\n\n\(project.absoluteString)"
+        alert.addButton(withTitle: italian ? "Chiudi" : "Close")
+        alert.addButton(withTitle: italian ? "Apri su GitHub" : "Open on GitHub")
+        if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(project) }
+    }
+
     var body: some Scene {
         WindowGroup("NTRIP Scope") { RadioView() }
             .windowResizability(.contentMinSize)
             .defaultSize(width: 610, height: 340)
-            .commands { CommandGroup(replacing: .newItem) {} }
+            .commands {
+                CommandGroup(replacing: .newItem) {}
+                CommandGroup(replacing: .appInfo) {
+                    Button(language == "it" ? "Informazioni su NTRIP Scope" : "About NTRIP Scope") { showAbout() }
+                }
+            }
     }
 }

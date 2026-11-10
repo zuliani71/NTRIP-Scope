@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ntripscope_mobile/main.dart';
 import 'package:ntripscope_mobile/rtcm.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 void main() {
   testWidgets('phone layout has diagnostics tabs and caster form', (
@@ -22,6 +23,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('No valid RTCM3 frames received'), findsOneWidget);
   });
+  testWidgets('about displays installed version, author and GitHub link', (
+    tester,
+  ) async {
+    PackageInfo.setMockInitialValues(
+      appName: 'NTRIP Scope',
+      packageName: 'ntripscope',
+      version: '9.8.7',
+      buildNumber: '42',
+      buildSignature: '',
+    );
+    await tester.pumpWidget(const ScopeApp());
+    await tester.tap(find.byTooltip('About NTRIP Scope'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Version 9.8.7 (build 42)'), findsOneWidget);
+    expect(find.textContaining('David Zuliani'), findsOneWidget);
+    expect(
+      find.textContaining('https://github.com/zuliani71/NTRIP-Scope'),
+      findsOneWidget,
+    );
+    expect(find.text('Open on GitHub'), findsOneWidget);
+  });
+
   testWidgets('latest RTCM frame follows the stream and history stays pinned', (
     tester,
   ) async {

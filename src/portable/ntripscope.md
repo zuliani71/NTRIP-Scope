@@ -65,3 +65,5 @@ separator. Boolean values accept `true` and `false`.
 | | `stdout` | Defaults to `true` when no other output is selected |
 
 For a ready-to-edit VRS example, see [ntripscope-vrs.example.ini](ntripscope-vrs.example.ini).
+
+Use `ntripscope --version` by itself, or `--app-version`, to display the application version. `--version 1` and `--version 2` still select the NTRIP protocol version.
