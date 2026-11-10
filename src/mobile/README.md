@@ -47,7 +47,7 @@ NTRIP Scope richiede iOS o iPadOS 15 o successivo. La versione di sviluppo si in
    git clone https://github.com/zuliani71/NTRIP-Scope.git
    cd NTRIP-Scope/src/mobile
    flutter pub get
-   flutter build ios --config-only
+   flutter build ios --config-only --no-codesign
    open ios/Runner.xcworkspace
    ```
 
