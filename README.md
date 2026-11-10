@@ -113,3 +113,5 @@ The portable decoder uses [pyrtcm](https://github.com/semuconsulting/pyrtcm), se
 ## License
 
 NTRIP Scope is distributed under the [MIT License](LICENSE), copyright © 2026 zuliani71. Preserve the copyright and license notice when redistributing the software. Third-party components retain their own licenses.
+
+Original documentation, research papers, and datasets that the project publishes will be shared under the [Creative Commons Attribution 4.0 International license (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/), unless the material specifies a different license. Third-party materials retain their respective licenses.
