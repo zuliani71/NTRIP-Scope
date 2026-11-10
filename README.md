@@ -2,7 +2,7 @@
 
 <img src="assets/orbit.png" alt="NTRIP Scope satellite application icon" width="128">
 
-NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
+NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. A mobile diagnostic client is available for Android. The iPhone version is in development. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
 
 ## Downloads
 
@@ -37,6 +37,12 @@ See the [CLI guide and full INI syntax](src/portable/ntripscope.md), the
 [VRS example](src/portable/ntripscope-vrs.example.ini).
 Build a standalone executable on the target system with
 `python src/portable/build.py --cli` after installing the build requirements.
+
+### Android client
+
+[Download the Android 0.1.2 preview APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.2/NTRIP-Scope-Android-0.1.2-debug.apk). It requires Android 7.0 or later. Open the downloaded APK on your phone to install it. Android may ask you to allow installation from the app you used to open the file.
+
+The Android client runs in the foreground and supports mountpoint discovery, rover GGA for VRS, live HEX and ASCII, RTCM3 decoding, and capture export. It can load and save the same INI format used by the desktop and command-line clients. See the [mobile source and build instructions](src/mobile/README.md).
 
 ## Screenshots
 
@@ -75,6 +81,7 @@ Use a serial device name appropriate for the system where the configuration runs
 |---|---|
 | [src/macos/](src/macos/) | Native macOS app in Swift and its build script |
 | [src/portable/](src/portable/) | Shared Windows and Linux desktop app and cross-platform command-line client in Python |
+| [src/mobile/](src/mobile/) | Android diagnostic client and iPhone project in Flutter |
 | [assets/](assets/) | Shared map, icon and localization files |
 
 ## Run from source
