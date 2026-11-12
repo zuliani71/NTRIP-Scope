@@ -4,6 +4,8 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var receiver: BluetoothReceiver?
+  private var documents: PlatformDocuments?
+  private var sessionLifecycle: SessionLifecycle?
 
   override func application(
     _ application: UIApplication,
@@ -15,7 +17,11 @@ import UIKit
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NtripBluetooth")!
-    receiver = BluetoothReceiver(messenger: registrar.messenger())
+    let files = PlatformDocuments(messenger: registrar.messenger())
+    documents = files
+    let ble = BluetoothReceiver(messenger: registrar.messenger(), documents: files)
+    receiver = ble
+    sessionLifecycle = SessionLifecycle(messenger: registrar.messenger(), receiver: ble, documents: files)
   }
 }
 
@@ -30,6 +36,7 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
   private var scanResult: FlutterResult?
   private var scanTimer: Timer?
   private var openResult: FlutterResult?
+  private var pendingDeviceID: UUID?
   private var peripheral: CBPeripheral?
   private var serviceID = CBUUID(string: "0000")
   private var writeID = CBUUID(string: "0000")
@@ -38,8 +45,10 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
   private var reader: CBCharacteristic?
   private var pendingWrite: (bytes: Data, offset: Int, result: FlutterResult)?
   private var waitingForAck = false
+  private var closing: [UUID: CBPeripheral] = [:]
+  private var closeResults: [FlutterResult] = []
 
-  init(messenger: FlutterBinaryMessenger) {
+  init(messenger: FlutterBinaryMessenger, documents: PlatformDocuments) {
     super.init()
     FlutterMethodChannel(name: "ntripscope/outputs", binaryMessenger: messenger)
       .setMethodCallHandler { [weak self] call, result in
@@ -57,16 +66,17 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
         case "openBle":
           guard let args = call.arguments as? [String: String],
                 let id = args["address"].flatMap(UUID.init(uuidString:)),
-                let device = self.devices[id], self.openResult == nil, self.peripheral == nil else {
+                let service = args["service"], let write = args["write"], let read = args["read"],
+                self.openResult == nil, self.peripheral == nil, self.closing.isEmpty else {
             result(FlutterError(code: "bluetooth", message: "Select a BLE receiver before connecting", details: nil)); return
           }
-          self.serviceID = CBUUID(string: args["service"]!)
-          self.writeID = CBUUID(string: args["write"]!)
-          self.readID = CBUUID(string: args["read"]!)
+          self.serviceID = CBUUID(string: service)
+          self.writeID = CBUUID(string: write)
+          self.readID = CBUUID(string: read)
           self.openResult = result
-          self.peripheral = device
-          device.delegate = self
-          self.central?.connect(device)
+          self.pendingDeviceID = id
+          if self.central == nil { self.central = CBCentralManager(delegate: self, queue: .main) }
+          else { self.beginOpen() }
         case "writeBle":
           guard self.pendingWrite == nil, self.writer != nil, let data = call.arguments as? FlutterStandardTypedData else {
             result(FlutterError(code: "bluetooth", message: "BLE receiver is disconnected or busy", details: nil)); return
@@ -74,9 +84,8 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
           self.pendingWrite = (data.data, 0, result)
           self.sendNext()
         case "closeBle":
-          self.close()
-          result(nil)
-        default: result(FlutterMethodNotImplemented)
+          self.close(result: result)
+        default: if !documents.handleOutput(call, result: result) { result(FlutterMethodNotImplemented) }
         }
       }
     FlutterEventChannel(name: "ntripscope/bluetooth", binaryMessenger: messenger).setStreamHandler(self)
@@ -90,9 +99,23 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
 
   func centralManagerDidUpdateState(_ central: CBCentralManager) {
     if scanResult != nil { beginScan() }
+    if openResult != nil, pendingDeviceID != nil { beginOpen() }
     if central.state != .poweredOn, peripheral != nil {
       fail("Bluetooth is unavailable or disabled")
     }
+  }
+
+  private func beginOpen() {
+    guard let central, openResult != nil, let id = pendingDeviceID else { return }
+    if central.state == .unknown || central.state == .resetting { return }
+    guard central.state == .poweredOn, closing.isEmpty,
+          let device = devices[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
+      fail("Receiver unavailable. Enable Bluetooth and scan for the BLE receiver again"); return
+    }
+    pendingDeviceID = nil
+    peripheral = device
+    device.delegate = self
+    central.connect(device)
   }
 
   private func beginScan() {
@@ -128,6 +151,7 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
     if self.peripheral === peripheral { fail(error?.localizedDescription ?? "BLE connection failed") }
   }
   func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+    if closing.removeValue(forKey: peripheral.identifier) != nil { completeCloseIfReady(); return }
     if self.peripheral === peripheral { fail(error?.localizedDescription ?? "BLE receiver disconnected") }
   }
 
@@ -188,12 +212,27 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
     if self.peripheral === peripheral { sendNext() }
   }
 
+  func shutdownForBackground(completion: @escaping () -> Void = {}) {
+    central?.stopScan(); scanTimer?.invalidate(); scanTimer = nil
+    let scanning = scanResult; scanResult = nil
+    scanning?(FlutterError(code: "cancelled", message: "App entered background", details: nil))
+    close(result: { _ in completion() })
+  }
+
+  private func completeCloseIfReady() {
+    guard closing.isEmpty else { return }
+    let callbacks = closeResults; closeResults.removeAll()
+    callbacks.forEach { $0(nil) }
+  }
+
   private func fail(_ message: String) {
     close(message: message)
     events?(["disconnected": true])
   }
-  private func close(message: String = "Bluetooth session closed") {
+  private func close(message: String = "Bluetooth session closed", result: FlutterResult? = nil) {
+    if let result { closeResults.append(result) }
     let device = peripheral
+    pendingDeviceID = nil
     peripheral = nil
     writer = nil
     reader = nil
@@ -202,6 +241,16 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
     let writing = pendingWrite; pendingWrite = nil
     opening?(FlutterError(code: "bluetooth", message: message, details: nil))
     writing?.result(FlutterError(code: "bluetooth", message: message, details: nil))
-    if let device { central?.cancelPeripheralConnection(device) }
+    if let device, device.state != .disconnected {
+      closing[device.identifier] = device
+      central?.cancelPeripheralConnection(device)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+        guard let self, !self.closing.isEmpty else { return }
+        let callbacks = self.closeResults; self.closeResults.removeAll()
+        callbacks.forEach { $0(FlutterError(code: "bluetooth", message: "BLE disconnect is still pending; wait before reconnecting", details: nil)) }
+        // Do not clear the barrier before the OS confirms disconnection.
+      }
+    }
+    completeCloseIfReady()
   }
 }

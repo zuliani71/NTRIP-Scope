@@ -108,6 +108,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       defaultTargetPlatform == TargetPlatform.android;
   String configurationName = "ntripscope.ini";
   bool keepStreaming = false;
+  bool keepScreenAwake = false;
   bool _hidden = false, _disposing = false;
   int _shutdowns = 0;
   Completer<void>? _sessionDone;
@@ -271,18 +272,13 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     setState(() => readingSettings = true);
     try {
       final bytes = Uint8List.fromList(utf8.encode(currentConfig().toIni()));
-      final destination = Platform.isAndroid
-          ? await saveConfigurationFile(
-              context,
-              bytes,
-              initialName: configurationName,
-            )
-          : await FilePicker.platform.saveFile(
-              fileName: configurationName,
-              bytes: bytes,
-            );
+      final destination = await saveConfigurationFile(
+        context,
+        bytes,
+        initialName: configurationName,
+      );
       if (destination != null) {
-        if (Platform.isAndroid) configurationName = destination;
+        configurationName = destination;
         unawaited(saveLocalSettings());
         showStatus(
           password.text.isEmpty
@@ -400,6 +396,10 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         bluetoothAddress = values['bluetoothAddress'] as String?;
         bluetoothName = values['bluetoothName'] as String?;
         keepStreaming = values['keepStreaming'] == true;
+        keepScreenAwake = values['keepScreenAwake'] == true;
+        bleService.text = values['bleService'] as String? ?? bleService.text;
+        bleWrite.text = values['bleWrite'] as String? ?? bleWrite.text;
+        bleRead.text = values['bleRead'] as String? ?? bleRead.text;
         configurationName =
             values['configurationName'] as String? ?? 'ntripscope.ini';
       });
@@ -423,11 +423,28 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           'bluetoothAddress': bluetoothAddress,
           'bluetoothName': bluetoothName,
           'keepStreaming': keepStreaming,
+          'keepScreenAwake': keepScreenAwake,
+          'bleService': bleService.text,
+          'bleWrite': bleWrite.text,
+          'bleRead': bleRead.text,
           'configurationName': configurationName,
         }),
       );
     } catch (_) {
       /* Configuration export remains available. */
+    }
+  }
+
+  Future<void> updateIosSession(bool active) async {
+    if (!Platform.isIOS) return;
+    try {
+      await _lifecycleChannel.invokeMethod<void>('setSession', {
+        'active': active,
+        'keepAwake': keepScreenAwake,
+      });
+    } catch (error) {
+      if (mounted && !_disposing) outputStatus(errorText(error));
+      if (active) rethrow;
     }
   }
 
@@ -450,6 +467,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   Future<void> stopSession({bool releaseReceiver = false}) async {
     final active = session;
     active?.stop(releaseReceiver: releaseReceiver);
+    unawaited(updateIosSession(false));
     if (!_disposing) fixRevision.value++;
     mapModel.stop();
     if (!_disposing) mapRevision.value = mapModel.snapshot;
@@ -651,6 +669,8 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         : null;
     _backgroundLease = lease;
     try {
+      await updateIosSession(!list);
+      if (active.stopped) return;
       if (lease != null) {
         await lease.start(config.mount);
         if (active.stopped) return;
@@ -808,6 +828,8 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         if (mounted && !_disposing && session == active)
           outputStatus(errorText(error));
       } finally {
+        await updateIosSession(false);
+        if (Platform.isIOS) receiverLinked = false;
         if (identical(activeOutputs, destinations)) activeOutputs = null;
         if (identical(_backgroundLease, lease)) _backgroundLease = null;
         if (identical(_sessionDone, finished)) _sessionDone = null;
@@ -1166,12 +1188,27 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           receiverError!,
           style: TextStyle(color: Theme.of(context).colorScheme.error),
         ),
-      if (Platform.isAndroid) androidOutputs(),
+      streamOutputs(),
       if (Platform.isIOS) bleOutputs(),
       if (outputNotice != null)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Text(outputNotice!),
+        ),
+      if (Platform.isIOS)
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Keep screen awake while streaming'),
+          subtitle: const Text(
+            'Prevents automatic screen lock during an active stream. Locking the phone or leaving the app closes the session on iOS.',
+          ),
+          value: keepScreenAwake,
+          onChanged: busy
+              ? null
+              : (value) {
+                  setState(() => keepScreenAwake = value!);
+                  unawaited(saveLocalSettings());
+                },
         ),
       if (_androidBackground) ...[
         CheckboxListTile(
@@ -1228,7 +1265,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     ],
   );
 
-  Widget androidOutputs() => ExpansionTile(
+  Widget streamOutputs() => ExpansionTile(
     tilePadding: EdgeInsets.zero,
     title: const Text('Stream outputs'),
     children: [
@@ -1267,29 +1304,30 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
               : (value) => setState(() => allowNetwork = value),
         ),
       ],
-      ListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Bluetooth Classic (SPP)'),
-        subtitle: Text(bluetoothName ?? 'Off · select a paired receiver'),
-        onTap: busy ? null : chooseBluetooth,
-        trailing: bluetoothAddress == null
-            ? null
-            : IconButton(
-                tooltip: 'Disable Bluetooth output',
-                onPressed: busy
-                    ? null
-                    : () async {
-                        await disconnectReceiver();
-                        if (mounted)
-                          setState(() {
-                            bluetoothAddress = null;
-                            bluetoothName = null;
-                          });
-                        unawaited(saveLocalSettings());
-                      },
-                icon: const Icon(Icons.clear),
-              ),
-      ),
+      if (Platform.isAndroid)
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Bluetooth Classic (SPP)'),
+          subtitle: Text(bluetoothName ?? 'Off · select a paired receiver'),
+          onTap: busy ? null : chooseBluetooth,
+          trailing: bluetoothAddress == null
+              ? null
+              : IconButton(
+                  tooltip: 'Disable Bluetooth output',
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          await disconnectReceiver();
+                          if (mounted)
+                            setState(() {
+                              bluetoothAddress = null;
+                              bluetoothName = null;
+                            });
+                          unawaited(saveLocalSettings());
+                        },
+                  icon: const Icon(Icons.clear),
+                ),
+        ),
     ],
   );
 
@@ -1313,10 +1351,15 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
             : IconButton(
                 onPressed: busy
                     ? null
-                    : () => setState(() {
-                        bluetoothAddress = null;
-                        bluetoothName = null;
-                      }),
+                    : () async {
+                        await disconnectReceiver();
+                        if (mounted)
+                          setState(() {
+                            bluetoothAddress = null;
+                            bluetoothName = null;
+                          });
+                        unawaited(saveLocalSettings());
+                      },
                 icon: const Icon(Icons.clear),
               ),
       ),

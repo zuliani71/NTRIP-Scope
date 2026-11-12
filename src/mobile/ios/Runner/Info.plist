@@ -29,7 +29,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Use your latitude and longitude to prepare the rover GGA sentence for your selected caster.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the NTRIP caster you select on your local network.</string>
+	<string>Connect to your NTRIP caster and share RTCM with TCP clients on your local network when enabled.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

@@ -14,7 +14,7 @@ abstract class ConfigurationStorage {
   Future<void> replace(ExistingConfiguration file, Uint8List bytes);
 }
 
-class AndroidConfigurationStorage implements ConfigurationStorage {
+class PlatformConfigurationStorage implements ConfigurationStorage {
   static const channel = MethodChannel('ntripscope/configuration');
   @override
   Future<ExistingConfiguration?> chooseExisting() async {
@@ -54,7 +54,7 @@ Future<String?> saveConfigurationFile(
   String initialName = 'ntripscope.ini',
   ConfigurationStorage? storage,
 }) async {
-  final target = storage ?? AndroidConfigurationStorage();
+  final target = storage ?? PlatformConfigurationStorage();
   final request = await showDialog<_SaveRequest>(
     context: context,
     builder: (_) =>

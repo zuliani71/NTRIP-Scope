@@ -2,6 +2,32 @@
 
 NTRIP Scope Mobile è il client diagnostico per Android e iOS. Le due app usano lo stesso codice Flutter e hanno tre schede per configurare la connessione, ispezionare i byte in diretta e consultare i messaggi RTCM3 ricevuti.
 
+## Aggiornamento iPhone/iPad 0.5.0 — allineamento con Android
+
+Guida pubblica in inglese, installazione e problemi noti: [iPhone and iPad guide](https://github.com/zuliani71/NTRIP-Scope/blob/main/docs/iphone-ipad.md). Il codice condiviso main è 0.5.0; l’ultimo APK Android pubblicato resta 0.4.3.
+
+Questa versione ricompila tutte le funzionalità condivise introdotte fino ad Android0.4.3 e completa i percorsi iOS rimasti indietro:
+
+- Live stream separati caster/ricevitore con HEX/ASCII, decoder RTCM3 Fields/Measurements, selezione latest/storico stabile, grafico C/N₀ per satellite/segnale e GPS sky da effemeridi1019/MSM GPS.
+- Mappe stradali/offline, prima apertura corretta, zoom conservato, Show both, mountpoint con nome, rover GGA/manuale, linea/distanza, coordinate decimali/DMS e quota ellissoidica quando disponibile.
+- Receiver fix originale GGA, sorgente, età, NO FIX/RTK FLOAT/RTK FIXED, STALE/PAUSED, anche nella mappa. Le coordinate manuali abilitate hanno priorità nell’uplink e non generano un fix artificiale.
+- **Stream outputs** su iOS espone anche file RTCM scelto con File e server TCP locale/LAN, utilizzabili insieme al ricevitore BLE. L’output file viene azzerato quando si connette. Record RTCM ed esportazione cattura rimangono separati e facoltativi.
+- **Save configuration** offre nome, selezione file esistente tramite File, conferma Replace, oppure nome modificato/Save as per una copia. La selezione da sola non scrive né importa le impostazioni; annullare non cambia il file. Le password non vengono esportate. Sono gestiti i permessi di accesso ai documenti iOS; file spostati o non scrivibili producono un errore invece di scrivere altrove.
+- Profilo BLE e preferenza schermo memorizzati. La chiusura BLE attende la conferma del sistema prima di permettere un’altra apertura. La chiusura in background dispone di un intervallo iOS limitato per completare caster, TCP, file e BLE.
+
+### Differenze necessarie rispetto ad Android
+
+| Funzione | Android | iPhone/iPad |
+|---|---|---|
+| Ricevitore Bluetooth | Classic SPP, incluso HC-06 | BLE con UUID del servizio/scrittura/notifiche del produttore; HC-06 Classic non supportato |
+| Uscite simultanee | File, TCP, SPP | File, TCP, BLE |
+| Configurazioni | Selettore documenti Android e conferma sostituzione | App File e conferma sostituzione; provider iCloud/terzi possono richiedere download/accesso |
+| Schermo spento | Keep streaming con servizio foreground | La sessione viene chiusa ordinatamente al blocco o al passaggio in background |
+| Evitare blocco automatico | Servizio può continuare a schermo spento | **Keep screen awake while streaming** evita solo il blocco automatico durante la sessione, finché l’app resta in primo piano |
+| USB seriale | Non implementata | Non implementata |
+
+Il tempo di background concesso da iOS è limitato: non viene presentata come disponibile una connessione NTRIP/TCP continua a schermo bloccato. Riferimenti Apple: https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(expirationhandler:) e https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html . L’iPad utilizza lo stesso progetto universale. La compatibilità radio dipende dal servizio BLE del ricevitore, non dal solo numero di versione Bluetooth.
+
 ## Aggiornamento Android 0.4.3 — 12 novembre 2026
 
 Sotto la mappa, Mountpoint include il nome del mountpoint. La sezione Rover mostra il fix GGA del ricevitore, sorgente, età, STALE/PAUSED e una nota quando sono usate le coordinate manuali. Il fix resta visibile anche con NO FIX e coordinate non disponibili; le coordinate manuali non generano uno stato RTK artificiale.
@@ -144,6 +170,8 @@ Configurare [l'ambiente iOS di Flutter](https://docs.flutter.dev/platform-integr
 ```sh
 BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter build ios --simulator
 ```
+
+Per preparare e aprire il progetto sul Mac, eseguire `Prepara-e-apri-iOS.command`: prepara le dipendenze e apre `ios/Runner.xcworkspace`. Richiede Flutter nel PATH oppure la variabile FLUTTER_ROOT impostata.
 
 Per installare su iPhone, selezionare il proprio team di firma per il target Runner in Xcode e usare `BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter run -d <device>`.
 
