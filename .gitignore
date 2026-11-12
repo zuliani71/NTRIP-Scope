@@ -13,3 +13,8 @@ CLAUDE.md
 **/.local-signing/
 *.keystore
 *.jks
+
+# Generated helper and private device provisioning
+src/portable/native/ntripscope-bluetooth
+*.mobileprovision
+*.ipa

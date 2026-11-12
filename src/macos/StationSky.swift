@@ -108,6 +108,9 @@ struct MountpointMap: View {
     var stationIsLastKnown = false
     var roverSource = ""
     var roverHeightAvailable = true
+    var receiverFix: ReceiverFixStatus? = nil
+    var receiverActive = false
+    var manualRover = false
     let ephemerides: [GPSEphemeris]
     let epoch: RTCMDecoder.GPSEpoch?
     @State private var sky = false
@@ -145,17 +148,18 @@ struct MountpointMap: View {
                     ScrollView(.vertical) {
                         VStack(alignment: .leading, spacing: 8) {
                             VStack(alignment: .leading, spacing: 0) {
-                                Text(tr("Mountpoint")).font(.caption.bold())
+                                Text("\(tr("Mountpoint")): \(name.isEmpty ? "—" : name)").font(.caption.bold())
                                 coordinateDetails(position, heightAvailable: fromRTCM)
                             }
-                            if let rover {
-                                VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 0) {
                                     HStack {
                                         Text("Rover").font(.caption.bold())
                                         Text(tr(roverSource)).font(.caption).foregroundStyle(.secondary)
                                     }
-                                    coordinateDetails(rover, heightAvailable: roverHeightAvailable)
+                                    ReceiverFixSummary(status: receiverFix, active: receiverActive, manual: manualRover)
+                                    if let rover { coordinateDetails(rover, heightAvailable: roverHeightAvailable) }
                                 }
+                            if let rover {
                                 Text("\(tr("Distanza dal mountpoint")): \(decimal(roverDistance(position, rover), digits: 3)) km")
                                     .font(.caption.monospacedDigit())
                             }
@@ -547,6 +551,30 @@ private struct GPSSkyView: View {
             .accessibilityLabel(tr("Traiettorie GPS nel cielo"))
             Text(tr("GPS · ±30 min dall’ultima epoca del flusso. Il punto indica la posizione a quell’epoca."))
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// Shared by the connection panel and map: manual GGA must not imply a receiver fix.
+struct ReceiverFixSummary: View {
+    let status: ReceiverFixStatus?
+    let active: Bool
+    let manual: Bool
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                if let fix = status {
+                    let prefix = !active ? "PAUSED · " : fix.stale(context.date) ? "STALE · " : ""
+                    let color: Color = !prefix.isEmpty ? .secondary : fix.quality == 0 ? .red : fix.quality == 4 ? .green : .orange
+                    Text("\(tr("Fix ricevitore")): \(prefix)\(fix.label) · \(fix.age(context.date)) s · \(fix.source)")
+                        .font(.caption.bold()).foregroundStyle(color).textSelection(.enabled)
+                } else {
+                    Text(tr("In attesa della GGA del ricevitore")).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if manual {
+                Text(tr("GGA manuale al caster; il fix mostrato è quello del ricevitore.")).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

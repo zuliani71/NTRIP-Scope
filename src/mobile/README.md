@@ -2,6 +2,10 @@
 
 NTRIP Scope Mobile è il client diagnostico per Android e iOS. Le due app usano lo stesso codice Flutter e hanno tre schede per configurare la connessione, ispezionare i byte in diretta e consultare i messaggi RTCM3 ricevuti.
 
+## Aggiornamento Android 0.4.3 — 12 novembre 2026
+
+Sotto la mappa, Mountpoint include il nome del mountpoint. La sezione Rover mostra il fix GGA del ricevitore, sorgente, età, STALE/PAUSED e una nota quando sono usate le coordinate manuali. Il fix resta visibile anche con NO FIX e coordinate non disponibili; le coordinate manuali non generano uno stato RTK artificiale.
+
 ## Aggiornamento Android 0.4.2 — 12 novembre 2026
 
 Corretto il primo caricamento della mappa mobile, che poteva richiedere un pan o uno zoom per completare la visualizzazione. L’inquadratura iniziale è ora dichiarata nelle opzioni della mappa; il callback onMapReady non sposta più la camera mentre lo strato delle tessere si inizializza. Le coordinate di stazione ricevute dopo l’apertura vengono gestite con un fit differito. Il viewport resta stabile durante i successivi aggiornamenti del rover.

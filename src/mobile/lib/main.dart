@@ -349,10 +349,16 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ScopeMapScreen(
-          positions: mapRevision,
-          sky: skyRevision,
-          name: mount.text.trim(),
+        builder: (_) => ListenableBuilder(
+          listenable: fixRevision,
+          builder: (context, child) => ScopeMapScreen(
+            fixStatus: fixModel.status,
+            receiverActive: session != null && !session!.stopped,
+            manualRover: sendRover,
+            positions: mapRevision,
+            sky: skyRevision,
+            name: mount.text.trim(),
+          ),
         ),
       ),
     );
@@ -444,6 +450,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   Future<void> stopSession({bool releaseReceiver = false}) async {
     final active = session;
     active?.stop(releaseReceiver: releaseReceiver);
+    if (!_disposing) fixRevision.value++;
     mapModel.stop();
     if (!_disposing) mapRevision.value = mapModel.snapshot;
     redraw?.cancel();
@@ -809,6 +816,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
             if (!list) rtcmRevision.value++;
             setState(() {
               session = null;
+              fixRevision.value++;
               status = wasStopped || active.releaseReceiverOnStop
                   ? receiverError ??
                         (_hidden

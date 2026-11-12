@@ -51,9 +51,11 @@ class ReceiverFixBadge extends StatefulWidget {
     required this.status,
     required this.active,
     required this.manual,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
   });
   final ReceiverFixStatus? status;
   final bool active, manual;
+  final EdgeInsetsGeometry padding;
   @override
   State<ReceiverFixBadge> createState() => _ReceiverFixBadgeState();
 }
@@ -91,7 +93,7 @@ class _ReceiverFixBadgeState extends State<ReceiverFixBadge> {
         ? Colors.green.shade800
         : Colors.orange.shade900;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: widget.padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

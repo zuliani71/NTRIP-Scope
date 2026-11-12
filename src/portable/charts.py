@@ -57,9 +57,10 @@ def cnr_chart(canvas, rows, tr):
 
 
 class MapSky(ttk.Frame):
-    def __init__(self, parent, provider, tr, *, street=True, context_key=None, rover_source=None):
+    def __init__(self, parent, provider, tr, *, street=True, context_key=None, rover_source=None, receiver_fix=None):
         super().__init__(parent, padding=10)
         self.provider, self.tr = provider, tr
+        self.receiver_fix=receiver_fix or (lambda: (tr("Waiting for receiver GGA"), ""))
         self.context_key=context_key
         self.rover_source=rover_source or (lambda: "")
         self.station = self.center = self.rover = None
@@ -128,8 +129,10 @@ class MapSky(ttk.Frame):
                     f"{self.tr('Longitude')} {lon:.6f}° · {sexagesimal(lon,'E',self.tr('W'))}\n"
                     f"{self.tr('Ellipsoidal height')} {height}")
         blocks=[]
-        if position:blocks.append(describe(self.tr("Mountpoint"),position))
-        if rover:blocks.append(describe("Rover"+(" · "+self.rover_source() if self.rover_source() else ""),rover))
+        if position:blocks.append(describe(self.tr("Mountpoint")+": "+(name or "—"),position))
+        rover_title="Rover"+(" · "+self.rover_source() if self.rover_source() else "")
+        fix,note=self.receiver_fix()
+        blocks.append((describe(rover_title,rover) if rover else rover_title)+"\n"+fix+("\n"+note if note else ""))
         if position and rover:blocks.append(f"{self.tr('Distance from mountpoint')}: {horizontal_distance(position,rover):.3f} km")
         self.coordinates.configure(text="\n\n".join(blocks))
         if self.tabs.select()==str(self.sky):self.draw_sky(decoder)

@@ -88,6 +88,7 @@ struct RoverMapState {
     }
     private var manual: StationPosition?
     private var manualEnabled = false
+    var manualIsEnabled: Bool { manualEnabled }
     private var received: Location?
 
     var effective: Location? {

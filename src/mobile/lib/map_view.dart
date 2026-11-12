@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'geo.dart';
 import 'sky.dart';
+import 'receiver_fix.dart';
 import 'sky_view.dart';
 
 class ScopeMapScreen extends StatelessWidget {
@@ -17,8 +18,13 @@ class ScopeMapScreen extends StatelessWidget {
     this.sky,
     this.name = '',
     this.tileProvider,
+    this.fixStatus,
+    this.receiverActive = false,
+    this.manualRover = false,
   });
   final String name;
+  final ReceiverFixStatus? fixStatus;
+  final bool receiverActive, manualRover;
   final ValueListenable<GeoSnapshot> positions;
   final ValueListenable<SkySnapshot>? sky;
   final TileProvider? tileProvider;
@@ -40,8 +46,14 @@ class ScopeMapScreen extends StatelessWidget {
           children: [
             ValueListenableBuilder<GeoSnapshot>(
               valueListenable: positions,
-              builder: (context, value, _) =>
-                  ScopeMap(snapshot: value, tileProvider: tileProvider),
+              builder: (context, value, _) => ScopeMap(
+                snapshot: value,
+                tileProvider: tileProvider,
+                name: name,
+                fixStatus: fixStatus,
+                receiverActive: receiverActive,
+                manualRover: manualRover,
+              ),
             ),
             ValueListenableBuilder<GeoSnapshot>(
               valueListenable: positions,
@@ -66,7 +78,14 @@ class ScopeMap extends StatefulWidget {
     required this.snapshot,
     this.networkTiles = true,
     this.tileProvider,
+    this.name = '',
+    this.fixStatus,
+    this.receiverActive = false,
+    this.manualRover = false,
   });
+  final String name;
+  final ReceiverFixStatus? fixStatus;
+  final bool receiverActive, manualRover;
   final GeoSnapshot snapshot;
   final bool networkTiles;
   final TileProvider? tileProvider;
@@ -464,7 +483,7 @@ class ScopeMapState extends State<ScopeMap> {
               children: [
                 if (s != null)
                   coordinates(
-                    'Mountpoint',
+                    'Mountpoint: ${widget.name.isEmpty ? '—' : widget.name}',
                     s,
                     source: widget.snapshot.lastKnown
                         ? 'Last known RTCM position'
@@ -472,6 +491,17 @@ class ScopeMapState extends State<ScopeMap> {
                   ),
                 if (r != null)
                   coordinates('Rover', r, source: widget.snapshot.source),
+                if (r == null)
+                  const Text(
+                    'Rover',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ReceiverFixBadge(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  status: widget.fixStatus,
+                  active: widget.receiverActive,
+                  manual: widget.manualRover,
+                ),
                 if (distance != null)
                   Text(
                     'Distance from mountpoint: ${distance.toStringAsFixed(3)} km',

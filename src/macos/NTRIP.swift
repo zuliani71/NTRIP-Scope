@@ -726,19 +726,7 @@ struct RadioView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(tr(radio.status)).lineLimit(2)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        if let fix = radio.receiverFix {
-                            let prefix = !radio.busy ? "PAUSED · " : fix.stale(context.date) ? "STALE · " : ""
-                            let color: Color = !prefix.isEmpty ? .secondary : fix.quality == 0 ? .red : fix.quality == 4 ? .green : .orange
-                            Text("\(tr("Fix ricevitore")): \(prefix)\(fix.label) · \(fix.age(context.date)) s · \(fix.source)")
-                                .font(.caption.bold()).foregroundStyle(color).textSelection(.enabled)
-                        } else {
-                            Text(tr("In attesa della GGA del ricevitore")).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    if roverDraft.enabled {
-                        Text(tr("GGA manuale al caster; il fix mostrato è quello del ricevitore.")).font(.caption).foregroundStyle(.secondary)
-                    }
+                    ReceiverFixSummary(status: radio.receiverFix, active: radio.busy, manual: roverDraft.enabled)
                     if !radio.outputStatus.isEmpty { Text(radio.outputStatus).font(.caption) }
                     if !radio.ggaSource.isEmpty { Text(radio.ggaSource).font(.caption) }
                     if !radio.receiverError.isEmpty { Text(radio.receiverError).font(.caption).foregroundStyle(.red) }
@@ -1089,6 +1077,7 @@ private struct MapWindowContent: View {
                       stationIsLastKnown: lastKnown,
                       roverSource: radio.roverMap.effective?.source ?? "",
                       roverHeightAvailable: radio.roverMap.effective?.heightAvailable ?? false,
+                      receiverFix: radio.receiverFix, receiverActive: radio.busy, manualRover: radio.roverMap.manualIsEnabled,
                       ephemerides: activeStream ? Array(radio.rtcm.gpsOrbits.values) : [],
                       epoch: activeStream ? radio.rtcm.gpsEpoch : nil)
             .padding(16)

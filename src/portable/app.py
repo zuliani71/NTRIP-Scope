@@ -19,7 +19,7 @@ from receivers import SerialReceiverHub
 from nmea import GGAReader, position_from_gga, ReceiverFix
 from ntripscope import AUTHOR, PROJECT_URL, arguments as cli_arguments, settings
 
-DESKTOP_VERSION = "1.35"
+DESKTOP_VERSION = "1.36"
 ITALIAN = json.loads((ASSETS / "italian.json").read_text(encoding="utf-8"))
 SETTINGS = Path(os.getenv("APPDATA") or os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config") / "NTRIP Scope" / "settings.json"
 
@@ -449,7 +449,8 @@ class Client:
         win.minsize(470,330)
         self.map_view=MapSky(win,self.map_data,self.tr,street="--smoke-test" not in sys.argv,
                              context_key=lambda:(self.caster_key(),self.mount.get().strip().strip("/")),
-                             rover_source=lambda:self.tr("Manual Rover position") if self.send_rover.get() else self.receiver_source)
+                             rover_source=lambda:self.tr("Manual Rover position") if self.send_rover.get() else self.receiver_source,
+                             receiver_fix=lambda:(self.fix_label.cget("text"),self.fix_note.cget("text")))
         self.map_view.pack(fill="both",expand=True)
 
     def caster_key(self):

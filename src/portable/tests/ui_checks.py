@@ -84,10 +84,14 @@ with tempfile.TemporaryDirectory() as temp:
         client.events.put(('receiver',('Serial / Bluetooth · test',(fix(4)+'\r\n').encode())))
         client.poll();root.update();assert 'RTK FIXED' in client.fix_label.cget('text')
         assert client.fix_note.cget('text')
+        assert 'Mountpoint: TEST' in view.coordinates.cget('text')
+        assert 'RTK FIXED' in view.coordinates.cget('text')
+        assert 'Manual GGA' in view.coordinates.cget('text')
         assert client.count.winfo_ismapped()
         assert client.count.winfo_rooty()+client.count.winfo_height() <= root.winfo_rooty()+root.winfo_height()
         client.events.put(('receiver',('Serial / Bluetooth · test',(NOFIX+'\r\n').encode())))
         client.poll();root.update();assert 'NO FIX' in client.fix_label.cget('text')
+        assert 'NO FIX' in view.coordinates.cget('text')
         client.send_rover.set(False)
         position=client.receiver_position;counts=dict(client.receiver_streams);master=client.map_data()[1]
         client.toggle()
@@ -95,6 +99,7 @@ with tempfile.TemporaryDirectory() as temp:
         client.events.put(('data',station()));client.poll();root.update()
         assert client.receiver_position==position and client.receiver_streams==counts
         assert 'PAUSED' in client.fix_label.cget('text')
+        assert 'PAUSED' in view.coordinates.cget('text')
         client.decoder=Decoder();assert client.map_data()[1]==master
         client.events.put(('receiver_error','Receiver test: disconnected'));client.events.put(('finished',client.caster_key()));client.poll()
         assert 'Receiver test: disconnected' in client.status_label.cget('text')

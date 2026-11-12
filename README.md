@@ -6,7 +6,9 @@ NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a 
 
 ## What is new
 
-### Desktop 1.35 and command-line 1.32
+### Desktop 1.36 and command-line 1.32
+
+- **New in 1.36:** below the map, Mountpoint includes its name and Rover displays receiver fix quality, source, age, STALE/PAUSED and manual-coordinate information. NO FIX is shown even without valid rover coordinates.
 
 - Bidirectional receiver connections send RTCM to the receiver and forward checksum-valid GGA to the caster for VRS. macOS uses native RFCOMM for HC-06; Windows/Linux use the serial ports exposed by the operating system. Enabled manual rover coordinates take priority.
 - Separate caster and receiver HEX/ASCII panels make both directions readable. RTCM latest-frame updates and historical selection remain independent of receiver traffic.
@@ -17,7 +19,9 @@ NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a 
 - Compact header with icon, visible version, author/GitHub information; shared INI import/export. Stop freezes views and preserves the last station for the same caster/mountpoint; **Disconnect receiver** explicitly releases the receiver.
 - CLI 1.32 supports receiver GGA through bidirectional serial/SPP, with native macOS HC-06 RFCOMM. Standard output remains the default RTCM destination; file/TCP/serial destinations can run together.
 
-### Android 0.4.2
+### Android 0.4.3
+
+- **New in 0.4.3:** mountpoint name and receiver fix information are also visible below the map, updated independently of position changes. Manual coordinates never imply a receiver RTK fix.
 
 - Bidirectional Bluetooth Classic SPP, file and TCP outputs can run together. Separate receiver/caster inspection, receiver fix status and manual-GGA priority are available.
 - RTCM Fields/Measurements, per-satellite/signal C/N₀ chart and GPS sky plot. Sky requires healthy RTCM 1019 ephemerides and a GPS MSM epoch; other constellations are not plotted.
@@ -25,26 +29,28 @@ NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a 
 - Configuration saving can select an existing file, confirm replacement, or reuse its name to save a new copy. Exported configurations omit passwords.
 - First map opening now initializes the camera without requiring pan or zoom to complete tile display; zoom is preserved when the rover moves.
 
-Validation: desktop packages passed the recorded macOS checks and Windows/Linux GUI and executable checks (Windows 11, Ubuntu ARM64 and x64). Android 0.4.2 passed 40 Flutter tests; the unchanged native shutdown/file/service code passed 13 tests in 0.4.1, including simulated Android 16 cases. The user confirmed screen-off streaming on a real phone with 0.4.0. Receiver-specific reconnection after standby still needs physical-device confirmation. No new iOS binary is provided in this update.
+Validation: desktop packages passed the recorded macOS checks and Windows/Linux GUI and executable checks (Windows 11, Ubuntu ARM64 and x64). Android 0.4.3 passed 41 Flutter tests; the unchanged native shutdown/file/service code passed 13 tests in 0.4.1, including simulated Android 16 cases. The user confirmed screen-off streaming on a real phone with 0.4.0. Receiver-specific reconnection after standby still needs physical-device confirmation. No new iOS binary is provided in this update.
 
 ## Downloads
 
 ### Desktop client
 
-Choose the package for your system from the [v1.35 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.35).
+Choose the package for your system from the [v1.36 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.36).
 
 | Platform | Package |
 |---|---|
-| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-macos-arm64-1.35.zip) |
-| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-windows-x64-1.35.zip) |
-| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-linux-arm64-1.35.tar.gz) |
-| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-linux-x64-1.35.tar.gz) |
+| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/NTRIP-Scope-macos-arm64-1.36.zip) |
+| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/NTRIP-Scope-windows-x64-1.36.zip) |
+| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/NTRIP-Scope-linux-arm64-1.36.tar.gz) |
+| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/NTRIP-Scope-linux-x64-1.36.tar.gz) |
+
+[Download all desktop platforms in one ZIP](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/NTRIP-Scope-Desktop-1.36.zip). CLI remains version 1.32.
 
 On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux x64 build targets Ubuntu 22.04 or compatible systems. The Linux ARM64 build targets Ubuntu 24.04 or compatible systems.
 
 ### Command-line client
 
-Download the [cross-platform Python source package (CLI 1.32)](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-1.32-sorgenti.zip), which requires Python 3.10+ and the dependencies in `src/portable/requirements.txt`. Standalone Windows/Linux executables are included in the desktop packages. A [standalone macOS ARM64 CLI](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-macos-arm64-1.32.zip) is also available.
+Download the [cross-platform Python source package (CLI 1.32)](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/ntripscope-1.32-sorgenti.zip), which requires Python 3.10+ and the dependencies in `src/portable/requirements.txt`. Standalone Windows/Linux executables are included in the desktop packages. A [standalone macOS ARM64 CLI](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.36/ntripscope-macos-arm64-1.32.zip) is also available.
 
 From the extracted source folder, run:
 
@@ -65,9 +71,9 @@ Build a standalone executable on the target system with
 
 ### Android client
 
-[Download Android 0.4.2 APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.4.2/NTRIP-Scope-Android-0.4.2.apk) (Android 7.0+). Open it on the phone and allow installation from the app used to open the file if requested. Builds from 0.1.5 onward share the same signing certificate. The old 0.1.4 preview used a different certificate: export settings and uninstall that preview before installing the new APK.
+[Download Android 0.4.3 APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.4.3/NTRIP-Scope-Android-0.4.3.apk) (Android 7.0+). Open it on the phone and allow installation from the app used to open the file if requested. Builds from 0.1.5 onward share the same signing certificate. The old 0.1.4 preview used a different certificate: export settings and uninstall that preview before installing the new APK.
 
-Android supports simultaneous file, TCP server and paired Bluetooth Classic SPP outputs, receiver GGA uplink, live diagnostics, maps and GPS sky. USB serial is not implemented. See the [mobile guide](src/mobile/README.md) and [Android release notes](https://github.com/zuliani71/NTRIP-Scope/releases/tag/android-v0.4.2).
+Android supports simultaneous file, TCP server and paired Bluetooth Classic SPP outputs, receiver GGA uplink, live diagnostics, maps and GPS sky. USB serial is not implemented. See the [mobile guide](src/mobile/README.md) and [Android release notes](https://github.com/zuliani71/NTRIP-Scope/releases/tag/android-v0.4.3).
 
 ### iPhone and iPad client
 
