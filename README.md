@@ -46,9 +46,11 @@ On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and
 
 Download the [cross-platform Python source package (CLI 1.32)](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-1.32-sorgenti.zip), which requires Python 3.10+ and the dependencies in `src/portable/requirements.txt`. Standalone Windows/Linux executables are included in the desktop packages. A [standalone macOS ARM64 CLI](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-macos-arm64-1.32.zip) is also available.
 
-From the extracted folder, run:
+From the extracted source folder, run:
 
 ```sh
+cd src/portable
+python3 -m pip install -r requirements.txt
 python3 ntripscope.py --host caster.example.org --port 2101 --list
 python3 ntripscope.py --config ntripscope-vrs.example.ini
 ```
