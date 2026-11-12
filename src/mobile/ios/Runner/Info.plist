@@ -24,6 +24,8 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Connect to your GNSS receiver to send RTCM corrections and receive rover GGA coordinates.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Use your latitude and longitude to prepare the rover GGA sentence for your selected caster.</string>
 	<key>NSLocalNetworkUsageDescription</key>

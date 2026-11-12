@@ -18,7 +18,7 @@ void main() {
     expect(find.text('Caster host'), findsOneWidget);
     await tester.tap(find.text('Live stream'));
     await tester.pumpAndSettle();
-    expect(find.text('Latest bytes · HEX and ASCII'), findsOneWidget);
+    expect(find.text('Caster → RTCM'), findsOneWidget);
     await tester.tap(find.text('RTCM3'));
     await tester.pumpAndSettle();
     expect(find.text('No valid RTCM3 frames received'), findsOneWidget);

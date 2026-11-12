@@ -7,7 +7,11 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class Radio: ObservableObject {
-    @Published var mapRover: StationPosition?
+    @Published private(set) var roverMap = RoverMapState()
+    var mapRover: StationPosition? { roverMap.effective?.position }
+    func setManualMapRover(_ position: StationPosition?, enabled: Bool) {
+        roverMap.setManual(position, enabled: enabled)
+    }
     @Published var status = "Pronto"
     @Published var count = 0
     @Published var mounts: [String] = []
@@ -26,17 +30,38 @@ final class Radio: ObservableObject {
     }
     @Published var busy = false
     @Published private(set) var recent = Data()
+    private(set) var monitorGeneration = UUID()
+    @Published private(set) var receiverStreams: [String: Data] = [:]
+    @Published private(set) var receiverCounts: [String: Int] = [:]
     @Published private(set) var rtcm = RTCMDecoder()
     @Published private(set) var lastData: Date?
     private(set) var activityStart: Date?
     static let activityTimeout: TimeInterval = 2.5
     @Published private(set) var outputStatus = ""
+    @Published private(set) var receiverError = ""
+    @Published private(set) var stationPositions: [String: StationPosition] = [:]
+
+    func stationPosition(for key: String) -> StationPosition? {
+        if key == streamKey, let position = rtcm.antenna { return position }
+        return stationPositions[key]
+    }
+
+    private func rememberStation() {
+        guard !streamKey.isEmpty, let position = rtcm.antenna,
+              stationPositions[streamKey] != position else { return }
+        if stationPositions.count >= 100 && stationPositions[streamKey] == nil { stationPositions.removeAll() }
+        stationPositions[streamKey] = position
+    }
     private var listener: NWListener?
     private var tcpClient: NWConnection?
     private var tcpReady = false
     private var tcpPending = 0
-    private var serial: DispatchIO?
-    private var serialPending = 0
+    private var serial: SerialPort?
+    private var bluetoothSPP: BluetoothSPPPort?
+    private var closingSerial: SerialPort?
+    private var serialID = UUID()
+    private var serialBaud = 0
+    var receiverConnected: Bool { serial != nil || bluetoothSPP != nil }
     private var serialPath = ""
 
     private var connection: NWConnection?
@@ -50,18 +75,29 @@ final class Radio: ObservableObject {
     private var gga = ""
     private var rover: RoverPosition?
     private var ggaTimer: Timer?
+    private var serialGGA = NMEAGGAReader()
+    private var tcpGGA = NMEAGGAReader()
+    private var externalGGA: (sentence: String, received: Date)?
+    private var lastExternalSent = Date.distantPast
+    @Published private(set) var ggaSource = ""
+    @Published private(set) var receiverFix: ReceiverFixStatus?
+    private var fixReaders: [String: NMEAGGAReader] = [:]
 
-    func stop(_ message: String = "Disconnesso") {
+    func stop(_ message: String = "NTRIP disconnesso") {
+        rememberStation()
+        serialGGA = NMEAGGAReader()
+        serial?.discardPendingOutput()
+        bluetoothSPP?.discardPendingOutput()
         listener?.cancel()
         listener = nil
         tcpClient?.cancel()
         tcpClient = nil
+        tcpGGA = NMEAGGAReader()
         tcpReady = false
         tcpPending = 0
-        serial?.close(flags: .stop)
-        serial = nil
-        serialPending = 0
-        serialPath = ""
+        externalGGA = nil
+        lastExternalSent = .distantPast
+        ggaSource = ""
         outputStatus = ""
         ggaTimer?.invalidate()
         ggaTimer = nil
@@ -73,6 +109,21 @@ final class Radio: ObservableObject {
         files.removeAll()
         busy = false
         status = message
+        updateOutputs()
+    }
+
+    func disconnectReceiver() {
+        serialID = UUID()
+        bluetoothSPP?.close()
+        bluetoothSPP = nil
+        serial?.close()
+        closingSerial = serial ?? closingSerial
+        serial = nil
+        serialPath = ""
+        serialBaud = 0
+        serialGGA = NMEAGGAReader()
+        externalGGA = nil
+        updateOutputs()
     }
 
     func start(host: String, port: String, mount: String, user: String, password: String,
@@ -94,9 +145,11 @@ final class Radio: ObservableObject {
             status = "Inserisci una singola frase NMEA GGA"
             return
         }
+        receiverError = ""
         if !list {
             do {
                 if let serialDevice { try openSerial(serialDevice, baud: baud) }
+                else { disconnectReceiver() }
                 if let tcpPort { try openTCP(tcpPort) }
             } catch {
                 stop(error.localizedDescription)
@@ -119,8 +172,15 @@ final class Radio: ObservableObject {
         buffer = Data()
         count = 0
         recent = Data()
+        let nextStreamKey = list ? "" : "\(Self.casterKey(host, port, tls))|\(mount)"
+        if nextStreamKey != streamKey { roverMap.resetReceived() }
+        receiverFix = nil
+        fixReaders = [:]
+        receiverStreams = [:]
+        receiverCounts = [:]
         requestCaster = Self.casterKey(host, port, tls)
         streamKey = list ? "" : "\(requestCaster)|\(mount)"
+        monitorGeneration = UUID()
         rtcm = RTCMDecoder()
         lastData = nil
         activityStart = nil
@@ -181,14 +241,33 @@ final class Radio: ObservableObject {
     }
 
     private func sendGGA(_ client: NWConnection) {
-        let sentence = rover?.gga() ?? gga
-        guard !sentence.isEmpty else { return }
+        let sentence: String
+        if let rover {
+            sentence = rover.gga()
+            ggaSource = tr("GGA manuale → caster")
+        } else if !gga.isEmpty {
+            sentence = gga
+            ggaSource = tr("GGA manuale → caster")
+        } else {
+            guard !readingHeader, !listing, let external = externalGGA,
+                  Date().timeIntervalSince(lastExternalSent) >= 1 else { return }
+            externalGGA = nil
+            guard Date().timeIntervalSince(external.received) <= 5 else { return }
+            sentence = external.sentence
+            lastExternalSent = Date()
+            ggaSource = tr("GGA seriale / Bluetooth → caster")
+        }
         client.send(content: Data((sentence + "\r\n").utf8), completion: .contentProcessed { [weak self, weak client] error in
             MainActor.assumeIsolated {
                 guard let self, let client, self.connection === client, let error else { return }
                 self.stop(error.localizedDescription)
             }
         })
+    }
+
+    private func sendGGAFromSerial(_ client: NWConnection) {
+        guard rover == nil, gga.isEmpty else { return }
+        sendGGA(client)
     }
 
     private var table = Data()
@@ -249,9 +328,10 @@ final class Radio: ObservableObject {
             readingHeader = false
             table = Data()
             status = listing ? "Lettura mountpoint…" : "Connesso, in attesa di dati…"
-            if !listing, rover != nil || !gga.isEmpty {
+            if !listing {
                 sendGGA(client)
-                ggaTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self, weak client] _ in
+                let interval: TimeInterval = rover != nil || !gga.isEmpty ? 10 : 1
+                ggaTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self, weak client] _ in
                     MainActor.assumeIsolated {
                         guard let self, let client, self.connection === client else { return }
                         self.sendGGA(client)
@@ -312,6 +392,7 @@ final class Radio: ObservableObject {
         count += data.count
         recent = Data((recent + data.suffix(256)).suffix(256))
         rtcm.receive(data)
+        rememberStation()
         let now = Date()
         if lastData.map({ now.timeIntervalSince($0) >= Self.activityTimeout }) ?? true {
             activityStart = now
@@ -367,10 +448,26 @@ final class Radio: ObservableObject {
         server.start(queue: .main)
     }
 
+    private func monitorReceiver(_ data: Data, source: String) {
+        var reader = fixReaders[source] ?? NMEAGGAReader(includeNoFix: true)
+        for sentence in reader.feed(data) {
+            if let quality = NMEAGGAReader.quality(sentence) {
+                receiverFix = ReceiverFixStatus(quality: quality, received: Date(), source: source)
+            }
+        }
+        fixReaders[source] = reader
+        receiverStreams[source] = Data(((receiverStreams[source] ?? Data()) + data.suffix(8192)).suffix(8192))
+        receiverCounts[source, default: 0] += data.count
+    }
+
     private func watchTCP(_ peer: NWConnection) {
-        peer.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak peer] _, _, done, error in
+        peer.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self, weak peer] data, _, done, error in
             MainActor.assumeIsolated {
                 guard let self, let peer, self.tcpClient === peer else { return }
+                if let data, !data.isEmpty {
+                    self.monitorReceiver(data, source: "TCP · \(self.listener?.port?.rawValue ?? 0)")
+                    for sentence in self.tcpGGA.feed(data) { self.roverMap.receive(sentence, source: "GGA · TCP") }
+                }
                 if done || error != nil { self.closeTCPPeer() }
                 else { self.watchTCP(peer) }
             }
@@ -380,6 +477,7 @@ final class Radio: ObservableObject {
     private func closeTCPPeer() {
         tcpClient?.cancel()
         tcpClient = nil
+        tcpGGA = NMEAGGAReader()
         tcpReady = false
         tcpPending = 0
         updateOutputs()
@@ -391,7 +489,8 @@ final class Radio: ObservableObject {
             let state = tcpReady ? tr("collegato") : tr("in ascolto")
             outputs.append("TCP 127.0.0.1:\(port.rawValue) · \(state)")
         }
-        if !serialPath.isEmpty { outputs.append(tr("Seriale \(serialPath)")) }
+        if bluetoothSPP != nil { outputs.append("Bluetooth SPP · HC-06 (direct)") }
+        else if !serialPath.isEmpty { outputs.append(tr("Seriale \(serialPath)")) }
         outputStatus = outputs.joined(separator: "  |  ")
     }
 
@@ -400,22 +499,42 @@ final class Radio: ObservableObject {
               !path.dropFirst(5).contains("/") else {
             throw OutputError("Scegli una porta seriale")
         }
-        let fd = Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
-        guard fd >= 0 else { throw OutputError("Seriale: \(String(cString: strerror(errno)))") }
-        var options = termios()
-        guard tcgetattr(fd, &options) == 0 else {
-            Darwin.close(fd)
-            throw OutputError("Impossibile leggere le impostazioni seriali")
+        if receiverConnected, serialPath == path, serialBaud == baud,
+           bluetoothSPP?.isReusable ?? true { return }
+        disconnectReceiver()
+        if let closingSerial {
+            guard closingSerial.close(wait: true) else { throw OutputError("Serial receiver is still closing") }
+            self.closingSerial = nil
         }
-        cfmakeraw(&options)
-        options.c_cflag &= ~tcflag_t(CSIZE | PARENB | CSTOPB | CCTS_OFLOW | CRTS_IFLOW)
-        options.c_cflag |= tcflag_t(CS8 | CLOCAL | CREAD)
-        guard cfsetspeed(&options, speed_t(baud)) == 0, tcsetattr(fd, TCSANOW, &options) == 0 else {
-            Darwin.close(fd)
-            throw OutputError("Impossibile configurare la porta seriale")
+        let id = UUID()
+        serialID = id
+        let dataHandler: (Data) -> Void = { [weak self] bytes in
+            MainActor.assumeIsolated {
+                guard let self, self.serialID == id, self.receiverConnected,
+                      self.busy, !self.listing else { return }
+                self.monitorReceiver(bytes, source: self.bluetoothSPP != nil ? "Bluetooth SPP · HC-06" : "Serial / Bluetooth · \(self.serialPath)")
+                for sentence in self.serialGGA.feed(bytes) {
+                    self.roverMap.receive(sentence, source: "GGA · Serial / Bluetooth")
+                    if self.rover == nil && self.gga.isEmpty {
+                        self.externalGGA = (sentence, Date())
+                    }
+                }
+                if let client = self.connection, !self.readingHeader { self.sendGGAFromSerial(client) }
+            }
         }
-        serial = DispatchIO(type: .stream, fileDescriptor: fd, queue: .main) { _ in Darwin.close(fd) }
+        let errorHandler: (String) -> Void = { [weak self] message in
+            MainActor.assumeIsolated {
+                guard let self, self.serialID == id else { return }
+                self.disableSerial(message)
+            }
+        }
+        if BluetoothSPPPort.isHC06Path(path) {
+            bluetoothSPP = try BluetoothSPPPort(onData: dataHandler, onError: errorHandler)
+        } else {
+            serial = try SerialPort(path: path, baud: baud, onData: dataHandler, onError: errorHandler)
+        }
         serialPath = path
+        serialBaud = baud
         updateOutputs()
     }
 
@@ -434,30 +553,15 @@ final class Radio: ObservableObject {
                 })
             }
         }
-        if let serial {
-            if serialPending + data.count > 262_144 {
-                disableSerial(tr("Uscita seriale troppo lenta"))
-                return
-            }
-            serialPending += data.count
-            let bytes = data.withUnsafeBytes { DispatchData(bytes: $0) }
-            serial.write(offset: 0, data: bytes, queue: .main) { [weak self, weak serial] done, _, error in
-                MainActor.assumeIsolated {
-                    guard let self, let serial, self.serial === serial else { return }
-                    if error != 0 { self.disableSerial(tr("Errore uscita seriale (\(error))")) }
-                    else if done { self.serialPending -= data.count }
-                }
-            }
-        }
+        serial?.write(data)
+        bluetoothSPP?.write(data)
     }
 
     private func disableSerial(_ message: String) {
-        serial?.close(flags: .stop)
-        serial = nil
-        serialPath = ""
-        serialPending = 0
-        updateOutputs()
-        outputStatus = [outputStatus, message].filter { !$0.isEmpty }.joined(separator: "  |  ")
+        let wasBusy = busy
+        disconnectReceiver()
+        receiverError = message
+        if wasBusy { stop(tr("Errore ricevitore") + ": " + message) }
     }
 
     private struct OutputError: LocalizedError {
@@ -554,25 +658,52 @@ struct RadioView: View {
     @State private var save = false
     @State private var output: URL?
     @State private var importedFiles: [URL] = []
-    @State private var serial = false
-    @State private var device = ""
+    @AppStorage("serialEnabled") private var serial = false
+    @AppStorage("serialDevice") private var device = ""
     @State private var devices: [String] = []
-    @State private var baud = 115200
-    @State private var monitor: NSPanel?
-    @State private var mapWindow: NSPanel?
+    @AppStorage("serialBaud") private var baud = 115200
+    @State private var monitor: NSWindow?
+    @State private var mapWindow: NSWindow?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("NTRIP Scope").font(.title2.bold())
-                    Text(tr("Client NTRIP · Decoder RTCM")).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 65, height: 65)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("NTRIP Scope").font(.title2.bold())
+                            Text("v" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"))
+                                .font(.caption.bold()).foregroundStyle(.primary)
+                        }.fixedSize(horizontal: true, vertical: false)
+                        Text(tr("Client NTRIP · Decoder RTCM"))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 }
-                Spacer()
-                Button(tr("Mappa e cielo")) { openMap() }
-                Button(tr("Flusso in diretta")) { openMonitor() }
-                Button(tr("Opzioni…")) { showOptions = true }.disabled(radio.busy)
+                .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 6)
+                HStack(spacing: 8) {
+                    Button(tr("Mappa e cielo")) { openMap() }
+                    Button(tr("Flusso in diretta")) { openMonitor() }
+                    Button(tr("Opzioni…")) { showOptions = true }.disabled(radio.busy)
+                    Button {
+                        NTRIPDecoderClientApp.showAbout(language: language)
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .accessibilityLabel(NTRIPDecoderClientApp.aboutTitle(language: language))
+                    .help(NTRIPDecoderClientApp.aboutTitle(language: language))
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     TextField(tr("Indirizzo caster"), text: $host, prompt: Text(tr("caster.esempio.it")))
@@ -585,7 +716,7 @@ struct RadioView: View {
                 }
                 HStack {
                     TextField(tr("Utente"), text: $user)
-                    Button(tr("Posizione rover…")) { showRover = true }
+                    Button(tr("Posizione rover manuale…")) { showRover = true }
                 }
                 SecureField("Password", text: $password)
             }
@@ -595,7 +726,22 @@ struct RadioView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(tr(radio.status)).lineLimit(2)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        if let fix = radio.receiverFix {
+                            let prefix = !radio.busy ? "PAUSED · " : fix.stale(context.date) ? "STALE · " : ""
+                            let color: Color = !prefix.isEmpty ? .secondary : fix.quality == 0 ? .red : fix.quality == 4 ? .green : .orange
+                            Text("\(tr("Fix ricevitore")): \(prefix)\(fix.label) · \(fix.age(context.date)) s · \(fix.source)")
+                                .font(.caption.bold()).foregroundStyle(color).textSelection(.enabled)
+                        } else {
+                            Text(tr("In attesa della GGA del ricevitore")).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if roverDraft.enabled {
+                        Text(tr("GGA manuale al caster; il fix mostrato è quello del ricevitore.")).font(.caption).foregroundStyle(.secondary)
+                    }
                     if !radio.outputStatus.isEmpty { Text(radio.outputStatus).font(.caption) }
+                    if !radio.ggaSource.isEmpty { Text(radio.ggaSource).font(.caption) }
+                    if !radio.receiverError.isEmpty { Text(radio.receiverError).font(.caption).foregroundStyle(.red) }
                     StreamActivityBar(busy: radio.busy, start: radio.activityStart, last: radio.lastData)
                     Text("\(radio.count.formatted()) \(tr("byte ricevuti"))").font(.caption.monospacedDigit())
                 }
@@ -610,14 +756,19 @@ struct RadioView: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 650, minHeight: 290)
+        .frame(minWidth: 608, minHeight: 290)
+        .background(InitialWindowWidth(width: 608))
         .environment(\.locale, Locale(identifier: language))
         .sheet(isPresented: $showOptions) { options }
+        .onAppear { updateMapRover(); refreshDevices() }
+        .onChange(of: roverDraft.enabled) { _ in updateMapRover() }
+        .onChange(of: roverDraft.height) { _ in updateMapRover() }
+        .onChange(of: roverDraft.separation) { _ in updateMapRover() }
         .onChange(of: roverDraft.latitude.value) { _ in updateMapRover() }
         .onChange(of: roverDraft.longitude.value) { _ in updateMapRover() }
         .sheet(isPresented: $showRover) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(tr("Posizione rover")).font(.title2.bold())
+                Text(tr("Posizione rover manuale")).font(.title2.bold())
                 Divider()
                 ScrollView {
                     RoverPositionEditor(draft: $roverDraft, raw: $gga)
@@ -638,17 +789,20 @@ struct RadioView: View {
             mapWindow?.title = tr("Mappa e cielo")
         }
         .onDisappear {
+            radio.stop()
+            radio.disconnectReceiver()
             monitor?.close()
             mapWindow?.close()
         }
     }
 
     private func updateMapRover() {
+        var position: StationPosition?
         if let lat = roverDraft.latitude.value, let lon = roverDraft.longitude.value {
-            radio.mapRover = StationPosition(latitude: lat, longitude: lon)
-        } else {
-            radio.mapRover = nil
+            position = StationPosition(latitude: lat, longitude: lon)
+            position?.height = RoverAngleDraft.number(roverDraft.height) ?? 0
         }
+        radio.setManualMapRover(position, enabled: roverDraft.enabled)
     }
 
     private func openMap() {
@@ -656,14 +810,10 @@ struct RadioView: View {
             mapWindow.makeKeyAndOrderFront(nil)
             return
         }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 690, height: 540),
-                            styleMask: [.titled, .closable, .resizable, .utilityWindow],
-                            backing: .buffered, defer: false)
-        panel.title = tr("Mappa e cielo")
-        panel.isReleasedWhenClosed = false
-        panel.contentMinSize = NSSize(width: 460, height: 350)
+        let panel = ScopeAuxiliaryWindows.make(title: tr("Mappa e cielo"),
+            size: NSSize(width: 740, height: 700), minimum: NSSize(width: 560, height: 540),
+            name: "NTRIPScope.MapWindow", right: false)
         panel.contentView = NSHostingView(rootView: MapWindowContent(radio: radio))
-        panel.center()
         mapWindow = panel
         panel.makeKeyAndOrderFront(nil)
     }
@@ -701,9 +851,18 @@ struct RadioView: View {
                             TextField(tr("Porta TCP"), text: $tcpPort).frame(width: 110)
                         }
                     }
-                    Toggle(tr("Inoltra su seriale"), isOn: $serial)
+                    Toggle(tr("Seriale / Bluetooth SPP (RTCM in uscita, GGA in ingresso)"), isOn: $serial)
                         .onChange(of: serial) { if $0 { refreshDevices() } }
                     if serial {
+                        Text(tr("Stop ferma NTRIP e congela i dati visualizzati, mantenendo aperto il collegamento al ricevitore. Usa Disconnetti ricevitore per chiudere la porta."))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if radio.receiverConnected {
+                            Button(tr("Disconnetti ricevitore")) { radio.disconnectReceiver() }
+                        }
+                    }
+                    if serial {
+                        Text(tr("La posizione rover manuale attiva ha priorità sulla GGA ricevuta.")).font(.caption)
                         HStack {
                             Picker(tr("Porta"), selection: $device) {
                                 Text(tr("Scegli porta")).tag("")
@@ -841,7 +1000,8 @@ struct RadioView: View {
     private func refreshDevices() {
         let available = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
         devices = available.filter { $0.hasPrefix("cu.") }.sorted().map { "/dev/" + $0 }
-        if !devices.contains(device) { device = "" }
+        // Keep the saved selection even when the paired device is temporarily unavailable.
+        if !device.isEmpty && !devices.contains(device) { devices.append(device) }
     }
 
     private func connect(list: Bool) {
@@ -875,14 +1035,10 @@ struct RadioView: View {
             monitor.makeKeyAndOrderFront(nil)
             return
         }
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 760, height: 660),
-                            styleMask: [.titled, .closable, .resizable, .utilityWindow],
-                            backing: .buffered, defer: false)
-        panel.title = tr("Flusso in diretta")
-        panel.isReleasedWhenClosed = false
-        panel.contentMinSize = NSSize(width: 480, height: 370)
+        let panel = ScopeAuxiliaryWindows.make(title: tr("Flusso in diretta"),
+            size: NSSize(width: 760, height: 660), minimum: NSSize(width: 560, height: 470),
+            name: "NTRIPScope.LiveWindow", right: true)
         panel.contentView = NSHostingView(rootView: StreamMonitor(radio: radio))
-        panel.center()
         monitor = panel
         panel.makeKeyAndOrderFront(nil)
     }
@@ -926,9 +1082,13 @@ private struct MapWindowContent: View {
         let name = Radio.cleanMount(mount)
         let caster = Radio.casterKey(host, port, tls)
         let activeStream = radio.streamKey == "\(caster)|\(name)"
-        let fromStream = activeStream ? radio.rtcm.antenna : nil
+        let fromStream = radio.stationPosition(for: "\(caster)|\(name)")
+        let lastKnown = fromStream != nil && (!activeStream || radio.rtcm.antenna == nil || !radio.busy)
         let advertised = radio.sourceCaster == caster ? radio.advertisedLocations[name] : nil
         MountpointMap(name: name, position: fromStream ?? advertised, fromRTCM: fromStream != nil, rover: radio.mapRover,
+                      stationIsLastKnown: lastKnown,
+                      roverSource: radio.roverMap.effective?.source ?? "",
+                      roverHeightAvailable: radio.roverMap.effective?.heightAvailable ?? false,
                       ephemerides: activeStream ? Array(radio.rtcm.gpsOrbits.values) : [],
                       epoch: activeStream ? radio.rtcm.gpsEpoch : nil)
             .padding(16)
@@ -946,58 +1106,142 @@ private func hexDump(_ bytes: [UInt8], ascii: Bool = false) -> String {
     }.joined(separator: "\n")
 }
 
+@MainActor
 struct StreamMonitor: View {
-    @ObservedObject var radio: Radio
+    let radio: Radio
     @AppStorage(AppLanguage.key) private var language = "en"
-    @State private var graph = false
     @State private var decode = false
-    @State private var selectedType: Int?
-    @State private var selectedFrame: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(tr(radio.status)).font(.headline)
-            Text("\(radio.count.formatted()) \(tr("byte ricevuti"))").font(.caption).foregroundStyle(.secondary)
             Picker(tr("Vista"), selection: $decode) {
                 Text(tr("HEX e ASCII")).tag(false)
                 Text(tr("Decoder RTCM3")).tag(true)
             }.pickerStyle(.segmented).labelsHidden()
-            if decode {
-                decoder
-            } else {
-                Text(tr("Ultimi 256 byte · I caratteri ASCII non stampabili appaiono come punti."))
-                    .font(.caption).foregroundStyle(.secondary)
-                ScrollView([.vertical, .horizontal]) {
-                    Text(radio.recent.isEmpty ? tr("In attesa di dati…") : hexDump(Array(radio.recent), ascii: true))
-                        .font(.system(.body, design: .monospaced))
-                        .fixedSize()
-                        .textSelection(.enabled)
-                        .padding(10)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            // Each child owns its updates. Receiver traffic cannot invalidate decoder controls.
+            ZStack {
+                RawStreamMonitor(radio: radio, active: !decode)
+                    .opacity(decode ? 0 : 1).allowsHitTesting(!decode).accessibilityHidden(decode)
+                RTCMStreamMonitor(radio: radio, active: decode)
+                    .opacity(decode ? 1 : 0).allowsHitTesting(decode).accessibilityHidden(!decode)
             }
         }
         .padding(16)
         .environment(\.locale, Locale(identifier: language))
-        .onChange(of: selectedType) { _ in selectedFrame = nil }
-        .onChange(of: radio.rtcm.messages.isEmpty) { empty in
-            if empty {
-                selectedType = nil
-                selectedFrame = nil
+    }
+}
+
+@MainActor
+private struct RawStreamMonitor: View {
+    let radio: Radio
+    let active: Bool
+    @State private var selectedReceiver = ""
+    @State private var display = StreamMonitorSnapshot()
+    private let refresh = Timer.publish(every: 0.25, on: .main, in: .default).autoconnect()
+
+    private var receiverText: String {
+        guard let data = display.receivers[selectedReceiver] else { return tr("In attesa di dati dal ricevitore…") }
+        let bytes = Array(data)
+        let ascii = String(bytes.map { (32..<127).contains($0) || $0 == 10 || $0 == 13 ? Character(UnicodeScalar(Int($0))!) : "." })
+        return "ASCII\n\(ascii)\n\nHEX + ASCII · \(tr("Ultimi 256 byte"))\n" + hexDump(Array(bytes.suffix(256)), ascii: true)
+    }
+
+    private func streamPane(title: String, count: Int, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.headline)
+                Spacer()
+                Text("\(count.formatted()) \(tr("byte ricevuti"))").font(.caption).foregroundStyle(.secondary)
             }
+            ScrollView([.vertical, .horizontal]) {
+                Text(text).font(.system(.body, design: .monospaced))
+                    .fixedSize().textSelection(.enabled).padding(10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         }
+        .padding(8)
+        .frame(minHeight: 100)
+    }
+
+    private func updateSnapshot() {
+        display.update(status: radio.status, count: radio.count, recent: radio.recent,
+                       receivers: radio.receiverStreams, receiverCounts: radio.receiverCounts)
+        if selectedReceiver.isEmpty || display.receivers[selectedReceiver] == nil {
+            let source = display.receivers.keys.sorted().first ?? ""
+            if source != selectedReceiver { selectedReceiver = source }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(tr(display.status)).font(.headline)
+                VSplitView {
+                    streamPane(title: tr("Caster → RTCM"), count: display.count,
+                               text: display.recent.isEmpty ? tr("In attesa di dati…") : hexDump(Array(display.recent), ascii: true))
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !display.receivers.isEmpty {
+                            Picker(tr("Sorgente ricevitore"), selection: $selectedReceiver) {
+                                ForEach(display.receivers.keys.sorted(), id: \.self) { source in
+                                    Text(source).tag(source)
+                                }
+                            }.padding(.horizontal, 8)
+                        }
+                        streamPane(title: tr("Ricevitore → Client"), count: display.receiverCounts[selectedReceiver] ?? 0,
+                                   text: receiverText)
+                    }.frame(minHeight: 140)
+                }
+                Text(tr("Pannelli indipendenti · Trascina il separatore per ridimensionarli."))
+                    .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear { updateSnapshot() }
+        .onChange(of: active) { visible in if visible { updateSnapshot() } }
+        .onReceive(refresh) { _ in if active { updateSnapshot() } }
+    }
+}
+
+@MainActor
+private struct RTCMStreamMonitor: View {
+    let radio: Radio
+    let active: Bool
+    @State private var graph = false
+    @State private var detailTab = "fields"
+    @State private var model = RTCMMonitorState()
+    // Default mode deliberately does not update native popup menus during tracking.
+    private let refresh = Timer.publish(every: 0.25, on: .main, in: .default).autoconnect()
+
+    private func updateDecoder() {
+        if model.needsUpdate(radio.rtcm, generation: radio.monitorGeneration) {
+            model.update(radio.rtcm, generation: radio.monitorGeneration)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle(tr("Pausa aggiornamento decoder"), isOn: $model.paused).toggleStyle(.checkbox)
+                Spacer()
+                Text(tr(model.paused ? "Vista ferma · Ricezione e registrazione continuano" : "Dettagli in tempo reale"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            decoder
+        }
+        .onAppear { updateDecoder() }
+        .onChange(of: active) { visible in if visible { updateDecoder() } }
+        .onChange(of: model.paused) { paused in if !paused { updateDecoder() } }
+        .onReceive(refresh) { _ in if active { updateDecoder() } }
     }
 
     private var decoder: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(tr("Frame con CRC errato")): \(radio.rtcm.badCRC.formatted()) · \(tr("Segnali MSM osservati nella sessione"))")
+            Text("\(tr("Frame con CRC errato")): \(model.decoder.badCRC.formatted()) · \(tr("Segnali MSM osservati nella sessione"))")
                 .font(.caption).foregroundStyle(.secondary)
-            if radio.rtcm.messages.isEmpty {
+            if model.decoder.messages.isEmpty {
                 Text(tr("In attesa di un messaggio RTCM3 valido…"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(radio.rtcm.messages.values.sorted { $0.id < $1.id }, selection: $selectedType) {
+                VSplitView {
+                Table(model.decoder.messages.values.sorted { $0.id < $1.id }, selection: Binding(get: { model.selectedType }, set: { model.selectType($0) })) {
                     TableColumn(tr("Tipo")) { Text(String($0.id)) }.width(min: 45, ideal: 55)
                     TableColumn(tr("Messaggio"), value: \.name).width(min: 110, ideal: 195)
                     TableColumn(tr("N.")) { Text($0.count.formatted()) }.width(min: 40, ideal: 55)
@@ -1006,22 +1250,24 @@ struct StreamMonitor: View {
                         Text(signals.isEmpty ? tr("Seleziona per il dettaglio") : signals)
                             .help(signals)
                     }
-                }.frame(minHeight: 100)
-                if let selectedType, let message = radio.rtcm.messages[selectedType] {
+                }.frame(minHeight: 140, maxHeight: .infinity)
+                if let selectedType = model.selectedType, let message = model.decoder.messages[selectedType] {
                     details(message)
                 } else {
                     Text(tr("Seleziona un tipo per consultare i singoli frame."))
                         .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 190, maxHeight: .infinity, alignment: .topLeading)
                 }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
 
     private func details(_ message: RTCMDecoder.Summary) -> some View {
-        let frame = message.frames.first { $0.id == selectedFrame } ?? message.frames.last
+        let frame = model.displayedFrame
         let choice = Binding<Int?>(
-            get: { message.frames.contains { $0.id == selectedFrame } ? selectedFrame : nil },
-            set: { selectedFrame = $0 }
+            get: { model.pinnedFrame?.id },
+            set: { model.selectFrame($0) }
         )
         return VStack(alignment: .leading, spacing: 8) {
             Divider()
@@ -1030,7 +1276,7 @@ struct StreamMonitor: View {
                 Spacer()
                 Picker("Frame", selection: choice) {
                     Text(tr("Ultimo ricevuto")).tag(nil as Int?)
-                    ForEach(message.frames.reversed()) { frame in
+                    ForEach(model.availableFrames.reversed()) { frame in
                         Text("#\(frame.id) · \(frame.time.formatted(date: .omitted, time: .standard))")
                             .tag(Optional(frame.id))
                     }
@@ -1038,23 +1284,38 @@ struct StreamMonitor: View {
             }
             Text(tr("Fino a 20 frame recenti per tipo")).font(.caption).foregroundStyle(.secondary)
             if let frame {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let msm = try? frame.msm(), !msm.cells.isEmpty {
-                            measurementTable(frame)
+                RTCMDetailTabs(selection: $detailTab)
+                Group {
+                    if detailTab == "fields" {
+                        LeadingDecoderScroll {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("RTCM \(frame.type) · \(frame.payload.count) \(tr("byte"))").font(.caption.bold())
+                                Text(frame.detail).textSelection(.enabled)
+                                Text("Payload HEX").font(.caption.bold())
+                                Text(hexDump(frame.payload)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            }
                         }
-                        Text(frame.detail).textSelection(.enabled)
-                        Text("Payload HEX · \(frame.payload.count) \(tr("byte"))").font(.caption.bold())
-                        Text(hexDump(frame.payload)).font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
+                    } else if detailTab == "measurements" {
+                        LeadingDecoderScroll {
+                            VStack(alignment: .leading) {
+                                if let rows = try? frame.measurements(), !rows.isEmpty {
+                                    numericMeasurements(rows, compact: frame.type % 10 <= 3)
+                                } else {
+                                    Text(tr("Nessuna misura decodificabile in questo frame."))
+                                }
+                            }
+                        }
+                    } else {
+                        ScrollView(.vertical, showsIndicators: true) {
+                            if let rows = try? frame.measurements() {
+                                signalChart(rows).padding(8)
+                            }
+                        }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                }
-                .frame(minHeight: 120, maxHeight: 330)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                }.frame(maxWidth: .infinity, minHeight: 150, maxHeight: .infinity, alignment: .topLeading)
+
             }
-        }
+        }.frame(maxWidth: .infinity, minHeight: 230, maxHeight: .infinity, alignment: .topLeading)
     }
     @ViewBuilder
     private func signalChart(_ rows: [RTCMDecoder.Frame.Measurement]) -> some View {
@@ -1112,7 +1373,7 @@ struct StreamMonitor: View {
             Text(tr("MSM compatto · Distanze modulo 1 ms, con ambiguità di millisecondi interi."))
                 .font(.caption).foregroundStyle(.secondary)
         }
-        ScrollView(.horizontal) {
+        VStack(alignment: .leading) {
             Grid(alignment: .trailing, horizontalSpacing: 14, verticalSpacing: 5) {
                 GridRow {
                     Text("Slot")
@@ -1153,12 +1414,18 @@ struct StreamMonitor: View {
 struct NTRIPDecoderClientApp: App {
     @AppStorage(AppLanguage.key) private var language = "en"
 
-    private func showAbout() {
+    static func aboutTitle(language: String) -> String {
+        language == "it" ? "Informazioni su NTRIP Scope" : "About NTRIP Scope"
+    }
+
+    @MainActor
+    static func showAbout(language: String) {
         let italian = language == "it"
         let project = URL(string: "https://github.com/zuliani71/NTRIP-Scope")!
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         let alert = NSAlert()
         alert.messageText = "NTRIP Scope"
+        alert.icon = NSApp.applicationIconImage
         let versionLabel = italian ? "Versione" : "Version"
         let materials = italian
             ? "Materiali originali pubblicati dal progetto con licenza CC BY 4.0, salvo diversa indicazione."
@@ -1172,11 +1439,11 @@ struct NTRIPDecoderClientApp: App {
     var body: some Scene {
         WindowGroup("NTRIP Scope") { RadioView() }
             .windowResizability(.contentMinSize)
-            .defaultSize(width: 610, height: 340)
+            .defaultSize(width: 608, height: 340)
             .commands {
                 CommandGroup(replacing: .newItem) {}
                 CommandGroup(replacing: .appInfo) {
-                    Button(language == "it" ? "Informazioni su NTRIP Scope" : "About NTRIP Scope") { showAbout() }
+                    Button(Self.aboutTitle(language: language)) { Self.showAbout(language: language) }
                 }
             }
     }

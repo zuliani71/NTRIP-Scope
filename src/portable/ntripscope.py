@@ -11,7 +11,7 @@ import threading
 from nmea import gga
 from transport import Cancelled, Connection, Outputs, run
 
-VERSION = "1.13"
+VERSION = "1.32"
 AUTHOR = "David Zuliani (zuliani71)"
 PROJECT_URL = "https://github.com/zuliani71/NTRIP-Scope"
 
@@ -86,7 +86,7 @@ def arguments(argv):
     parser.add_argument("--list", action=argparse.BooleanOptionalAction, help="List mountpoint names and exit")
     parser.add_argument("--file", action="append", metavar="PATH", help="Record raw RTCM (repeatable, overwrites file)")
     parser.add_argument("--tcp", action="append", metavar="PORT", help="Forward to a TCP listener on 127.0.0.1 (repeatable)")
-    parser.add_argument("--serial", action="append", metavar="DEVICE[:BAUD]", help="Write to serial (repeatable, default 115200 baud)")
+    parser.add_argument("--serial", action="append", metavar="DEVICE[:BAUD]", help="Bidirectional serial/SPP (macOS HC-06 uses native Bluetooth; repeatable; default 115200 baud)")
     parser.add_argument("--stdout", action=argparse.BooleanOptionalAction,
                         help="Write raw RTCM to stdout, also the default when no outputs are selected")
     parser.add_argument("--latitude", "--lat", type=float, help="Rover latitude in decimal degrees")
@@ -150,7 +150,7 @@ def main(argv=None):
         elif kind == "mounts":
             sys.stdout.buffer.write("".join(f"{name}\n" for name in sorted(value)).encode("utf-8"))
             sys.stdout.buffer.flush()
-        elif not quiet:
+        elif kind != "receiver" and not quiet:
             print(value, file=sys.stderr, flush=True)
 
     try:

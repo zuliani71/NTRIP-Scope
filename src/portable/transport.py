@@ -1,4 +1,5 @@
 """NTRIP wire protocol and optional byte-for-byte outputs."""
+import select
 import base64
 import socket
 import ssl
@@ -6,6 +7,8 @@ import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from urllib.parse import quote
+
+from nmea import GGAReader
 
 
 @dataclass(frozen=True)
@@ -42,10 +45,45 @@ class Stream:
         self.gga = None
         self.next_gga = float("inf")
         self.last_read = time.monotonic()
+        self.serial_inputs = []
+        self.external_gga = None
+        self.external_received = 0
+        self.external_sent = 0
+        self.external_ready = False
+        self.external_announced = False
+        self.emit = lambda *args: None
+        self.poll_tcp = lambda: None
+        self.poll_receiver = lambda: ()
+        self.receiver_parsers = {}
 
     def receive(self):
         while not self.stopped.is_set():
             now = time.monotonic()
+            accepted = False
+            self.poll_tcp()
+            incoming = []
+            for device, parser in self.serial_inputs:
+                waiting = device.in_waiting
+                if waiting:
+                    incoming.append(("Serial / Bluetooth · " + getattr(device, "port", "serial"), device.read(min(waiting, 4096)), parser))
+            for source, data in self.poll_receiver():
+                incoming.append((source, data, self.receiver_parsers.setdefault(source, GGAReader())))
+            for source, data, parser in incoming:
+                self.emit("receiver", (source, data))
+                for sentence in parser.feed(data):
+                    if self.gga is None and not accepted:
+                        self.external_gga = sentence
+                        self.external_received = now
+                accepted = accepted or self.external_received == now
+            if (self.external_ready and self.gga is None and self.external_gga is not None
+                    and now - self.external_sent >= 1):
+                if now - self.external_received <= 5:
+                    self.socket.sendall((self.external_gga + "\r\n").encode("ascii"))
+                    self.external_sent = now
+                    if not self.external_announced:
+                        self.emit("output", "GGA → caster (serial / Bluetooth)")
+                        self.external_announced = True
+                self.external_gga = None
             if now - self.last_read >= 30:
                 raise TimeoutError("No data received for 30 seconds")
             if now >= self.next_gga:
@@ -139,7 +177,14 @@ def request(config, list_only, gga):
     return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
 
 
-def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
+def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None, receivers=None):
+    try:
+        return _run(config, stopped, emit, list_only=list_only, gga=gga, outputs=outputs, receivers=receivers)
+    finally:
+        if receivers is not None: receivers.pause()
+
+
+def _run(config, stopped, emit, *, list_only=False, gga=None, outputs=None, receivers=None):
     with ExitStack() as resources:
         sock = resources.enter_context(socket.create_connection((config.host, config.port), timeout=5))
         if config.tls:
@@ -147,8 +192,30 @@ def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
         sock.settimeout(0.5)
         if stopped.is_set():
             raise Cancelled
-        sock.sendall(request(config, list_only, gga))
         stream = Stream(sock, stopped)
+        stream.gga = gga
+        stream.emit = emit
+        if outputs is None:
+            outputs = Outputs(
+                (config.file,) if config.file else (),
+                (config.tcp,) if config.tcp else (),
+                ((config.serial, config.baud),) if config.serial else (),
+            )
+        devices = []
+        if not list_only and receivers is not None:
+            devices = receivers.configure(outputs.serial_ports)
+            stream.poll_receiver = receivers.poll
+        elif not list_only and outputs.serial_ports:
+            from native_bluetooth import NativeBluetoothPort, uses_native_bluetooth
+            for port, baud in outputs.serial_ports:
+                if uses_native_bluetooth(port):
+                    device = resources.enter_context(NativeBluetoothPort(port, baud))
+                else:
+                    import serial
+                    device = resources.enter_context(serial.Serial(port, baud, timeout=0, write_timeout=1))
+                devices.append(device)
+                stream.serial_inputs.append((device, GGAReader()))
+        sock.sendall(request(config, list_only, gga))
         status = stream.line().split(maxsplit=2)
         if len(status) < 2 or status[1] != b"200":
             raise ValueError("Caster: " + b" ".join(status).decode(errors="replace"))
@@ -181,17 +248,7 @@ def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
             sock.sendall((gga() + "\r\n").encode("ascii"))
             stream.gga, stream.next_gga = gga, time.monotonic() + 10
 
-        if outputs is None:
-            outputs = Outputs(
-                (config.file,) if config.file else (),
-                (config.tcp,) if config.tcp else (),
-                ((config.serial, config.baud),) if config.serial else (),
-            )
-        devices = []
-        if outputs.serial_ports:
-            import serial
-            for port, baud in outputs.serial_ports:
-                devices.append(resources.enter_context(serial.Serial(port, baud, write_timeout=1)))
+        stream.external_ready = True
         listeners = {}
         for port in outputs.tcp_ports:
             listener = resources.enter_context(socket.socket())
@@ -199,6 +256,28 @@ def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
             listener.listen(1)
             listener.setblocking(False)
             listeners[listener] = None
+        def poll_tcp():
+            for listener, peer in list(listeners.items()):
+                if peer is None:
+                    try:
+                        peer, _ = listener.accept()
+                        peer.settimeout(0.2)
+                        listeners[listener] = peer
+                    except BlockingIOError:
+                        continue
+                try:
+                    readable, _, _ = select.select([peer], [], [], 0)
+                    if readable:
+                        data = peer.recv(4096)
+                        if data:
+                            emit("receiver", (f"TCP · {listener.getsockname()[1]}", data))
+                        else:
+                            peer.close()
+                            listeners[listener] = None
+                except OSError:
+                    peer.close()
+                    listeners[listener] = None
+        stream.poll_tcp = poll_tcp
         files = [resources.enter_context(open(path, "wb")) for path in outputs.files]
         for port in outputs.tcp_ports:
             emit("output", f"TCP 127.0.0.1:{port}")
@@ -213,7 +292,8 @@ def run(config, stopped, emit, *, list_only=False, gga=None, outputs=None):
                     output.write(block)
                     output.flush()
                 for device in devices:
-                    device.write(block)
+                    try: device.write(block)
+                    except Exception as error: raise OSError(f"Receiver {getattr(device, 'port', 'serial')}: {error}") from error
                 for listener, peer in listeners.items():
                     if peer is None:
                         try:

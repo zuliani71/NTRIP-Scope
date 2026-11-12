@@ -112,8 +112,11 @@ struct RoverPositionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle(tr("Invia posizione rover (GGA)"), isOn: $draft.enabled).toggleStyle(.checkbox)
+            Toggle(tr("Invia posizione rover manuale (GGA)"), isOn: $draft.enabled).toggleStyle(.checkbox)
             if draft.enabled {
+                Label(tr("La GGA generata da queste coordinate ha priorità sulle GGA ricevute da altre sorgenti (Bluetooth, seriale o TCP)."), systemImage: "info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 angleEditor(tr("Latitudine"), angle: $draft.latitude, limit: 90, positive: "N", negative: "S",
                             decimalFocus: .latDecimal, secondsFocus: .latSeconds)
                 angleEditor(tr("Longitudine"), angle: $draft.longitude, limit: 180, positive: "E", negative: tr("O"),

@@ -36,7 +36,7 @@ def load_tile(key):
             return data
     except (OSError, ValueError):
         pass
-    headers = {"User-Agent": "NTRIP-Scope/1.9"}
+    headers = {"User-Agent": "NTRIP-Scope/1.31 (+https://github.com/zuliani71/NTRIP-Scope)"}
     for name, header in (("etag", "If-None-Match"), ("modified", "If-Modified-Since")):
         if meta.get(name):
             headers[header] = meta[name]

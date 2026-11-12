@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>io.github.zuliani71.ntripscope.bluetooth</string>
+<key>CFBundleName</key><string>NTRIP Scope Bluetooth</string>
+<key>CFBundleVersion</key><string>1.32</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Connect to the paired HC-06 GNSS receiver to send RTCM corrections and receive rover GGA.</string>
+</dict></plist>

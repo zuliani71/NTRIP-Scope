@@ -10,12 +10,16 @@ import tkinter as tk
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
 
 from charts import ASSETS, BG, MapSky, cnr_chart
 from gnss import Decoder, dms, fields, from_dms, gga, observations
 from transport import Cancelled, Connection, Outputs, run
-from ntripscope import AUTHOR, PROJECT_URL, VERSION, arguments as cli_arguments, settings
+from receivers import SerialReceiverHub
+from nmea import GGAReader, position_from_gga, ReceiverFix
+from ntripscope import AUTHOR, PROJECT_URL, arguments as cli_arguments, settings
 
+DESKTOP_VERSION = "1.35"
 ITALIAN = json.loads((ASSETS / "italian.json").read_text(encoding="utf-8"))
 SETTINGS = Path(os.getenv("APPDATA") or os.getenv("XDG_CONFIG_HOME") or Path.home() / ".config") / "NTRIP Scope" / "settings.json"
 
@@ -59,9 +63,9 @@ class Client:
         self.output = tk.StringVar()
         self.tcp = tk.BooleanVar()
         self.tcp_port = tk.StringVar(value="5000")
-        self.serial = tk.BooleanVar()
-        self.serial_port = tk.StringVar()
-        self.baud = tk.StringVar(value="115200")
+        self.serial = tk.BooleanVar(value=saved.get("serial", False))
+        self.serial_port = tk.StringVar(value=saved.get("serial_port", ""))
+        self.baud = tk.StringVar(value=saved.get("baud", "115200"))
         self.send_rover = tk.BooleanVar()
         self.raw_gga = tk.StringVar()
         self.imported_outputs = Outputs()
@@ -79,13 +83,22 @@ class Client:
         self.source_key = self.stream_key = None
         self.bytes = 0
         self.recent = b""
+        self.receiver_streams = {}
+        self.receivers = SerialReceiverHub()
+        self.receiver_fix = ReceiverFix()
+        self.receiver_position = None
+        self.receiver_source = ""
+        self.receiver_parsers = {}
+        self.station_cache = {}
+        self.receiver_error = ""
         self.last = self.started = 0
         self.windows = {}
         self.map_view = None
         self.monitor_widgets = None
         self.outputs = []
         root.title("NTRIP Scope · RTCM Decoder")
-        root.minsize(620, 285)
+        root.minsize(608, 300)
+        root.geometry("640x350")
         try:
             self.icon = tk.PhotoImage(file=str(ASSETS / "orbit.png")).subsample(8)
             root.iconphoto(True, self.icon)
@@ -106,12 +119,23 @@ class Client:
         menu = tk.Menu(self.root)
         help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(label=self.tr("About NTRIP Scope"),
-                              command=lambda: self.open("about", "About NTRIP Scope", self.about))
+                              command=self.open_about)
         menu.add_cascade(label=self.tr("Help"), menu=help_menu)
         self.root.configure(menu=menu)
         top = ttk.Frame(self.main)
         top.pack(fill="x", pady=(0, 12))
-        ttk.Label(top, text="NTRIP Scope", font=("TkDefaultFont", 19, "bold")).pack(side="left")
+        if self.icon is not None:
+            artwork = tk.PhotoImage(file=str(ASSETS / "orbit.png")).zoom(6).subsample(116)
+            logo = ttk.Label(top, image=artwork)
+            logo.image = artwork
+            logo.pack(side="left", padx=(0, 12))
+        heading = ttk.Frame(top)
+        heading.pack(side="left")
+        title = ttk.Frame(heading); title.pack(anchor="w")
+        ttk.Label(title, text="NTRIP Scope", font=("TkDefaultFont", 17, "bold")).pack(side="left")
+        ttk.Label(title, text="v"+DESKTOP_VERSION, font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(6,0))
+        ttk.Label(heading, text=self.tr("NTRIP client · RTCM decoder"), font=("TkDefaultFont",9)).pack(anchor="w")
+        ttk.Button(top, text="ⓘ", width=3, command=self.open_about).pack(side="right", padx=2)
         for key, label, method in reversed((
             ("map","Map & sky",self.map_window), ("live","Live stream",self.monitor),
             ("options","Options",self.options),
@@ -137,16 +161,20 @@ class Client:
         ttk.Label(form,text=self.tr("Port")).grid(row=0,column=2,padx=(8,0))
         self.fetch = ttk.Button(form,text=self.tr("Fetch mountpoints"),command=lambda:self.start(True))
         self.fetch.grid(row=1,column=2,columnspan=2,sticky="ew",padx=(8,0))
-        self.rover_button = ttk.Button(form,text=self.tr("Rover position"),
-            command=lambda:self.open("rover","Rover position",self.rover))
+        self.rover_button = ttk.Button(form,text=self.tr("Manual Rover position"),
+            command=lambda:self.open("rover","Manual Rover position",self.rover))
         self.rover_button.grid(row=2,column=2,columnspan=2,sticky="ew",padx=(8,0))
         ttk.Separator(self.main).pack(fill="x",pady=12)
         footer = ttk.Frame(self.main)
         footer.pack(fill="x")
         self.action = ttk.Button(footer,command=self.toggle)
         self.action.pack(side="right")
-        self.status_label = ttk.Label(footer)
+        self.status_label = ttk.Label(footer,wraplength=440,justify="left")
         self.status_label.pack(anchor="w")
+        self.fix_label=ttk.Label(footer,wraplength=440,justify="left",font=("TkDefaultFont",9,"bold"))
+        self.fix_label.pack(anchor="w")
+        self.fix_note=ttk.Label(footer,wraplength=440,justify="left")
+        self.fix_note.pack(anchor="w")
         self.bar = tk.Canvas(footer,width=156,height=10,highlightthickness=0)
         self.bar.pack(anchor="w",pady=3)
         self.segments = [self.bar.create_rectangle(i*13,0,i*13+10,9,outline="") for i in range(12)]
@@ -174,21 +202,38 @@ class Client:
 
     def close(self):
         self.stopped.set()
+        self.receivers.pause()
+        threading.Thread(target=self.receivers.close, daemon=True).start()
         try:
             SETTINGS.parent.mkdir(parents=True, exist_ok=True)
             SETTINGS.write_text(json.dumps({
                 "language":self.lang.get(), "host":self.host.get(), "port":self.port.get(),
                 "mount":self.mount.get(), "user":self.user.get(), "tls":self.tls.get(),
-                "version":self.version.get(),
+                "version":self.version.get(), "serial":self.serial.get(),
+                "serial_port":self.serial_port.get(), "baud":self.baud.get(),
             }), encoding="utf-8")
         except OSError:
             pass
         self.root.destroy()
 
+    def open_about(self):
+        self.open("about", "About NTRIP Scope", self.about)
+
     def about(self, win):
         frame = ttk.Frame(win, padding=20)
         frame.pack(fill="both", expand=True)
-        for line in ("NTRIP Scope", f"{self.tr('Version')} {VERSION}", AUTHOR,
+        header = ttk.Frame(frame)
+        header.pack(fill="x", pady=(0, 8))
+        if self.icon is not None:
+            artwork = self.icon.subsample(2)
+            icon = ttk.Label(header, image=artwork)
+            icon.image = artwork
+            icon.pack(side="left", padx=(0, 12))
+        title = ttk.Frame(header)
+        title.pack(side="left")
+        ttk.Label(title, text="NTRIP Scope", font=("TkDefaultFont", 15, "bold")).pack(anchor="w")
+        ttk.Label(title, text=f"{self.tr('Version')} {DESKTOP_VERSION}").pack(anchor="w")
+        for line in (AUTHOR,
                      self.tr("Software: MIT License"),
                      self.tr("Original published project materials: CC BY 4.0 unless indicated otherwise."),
                      PROJECT_URL):
@@ -226,14 +271,18 @@ class Client:
         ttk.Checkbutton(frame,text=self.tr("Forward over TCP"),variable=self.tcp).grid(row=4,column=0,sticky="w",pady=3)
         ttk.Entry(frame,textvariable=self.tcp_port).grid(row=4,column=1,sticky="ew")
         ttk.Label(frame,text="127.0.0.1").grid(row=4,column=2,padx=4)
-        ttk.Checkbutton(frame,text=self.tr("Forward over serial"),variable=self.serial).grid(row=5,column=0,sticky="w",pady=3)
+        ttk.Checkbutton(frame,text=self.tr("Serial / Bluetooth SPP (RTCM out, GGA in)"),variable=self.serial).grid(row=5,column=0,sticky="w",pady=3)
         serial = ttk.Combobox(frame,textvariable=self.serial_port,values=[p.device for p in comports()])
         serial.grid(row=5,column=1,sticky="ew")
         ttk.Button(frame,text=self.tr("Refresh"),command=lambda:serial.configure(values=[p.device for p in comports()])).grid(row=5,column=2,padx=4)
         row(6,"Baud rate",ttk.Combobox(frame,textvariable=self.baud,values=(4800,9600,19200,38400,57600,115200,230400)))
-        ttk.Button(frame,text=self.tr("Load configuration…"),command=lambda:self.load_config(win)).grid(row=7,column=0,pady=(10,0),sticky="w")
-        ttk.Button(frame,text=self.tr("Save configuration…"),command=lambda:self.save_config(win)).grid(row=7,column=1,pady=(10,0),sticky="w")
-        ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("options")).grid(row=7,column=2,pady=(10,0))
+        ttk.Label(frame, text=self.tr("Manual rover GGA has priority over received serial/Bluetooth GGA."),
+                  wraplength=500).grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Button(frame,text=self.tr("Load configuration…"),command=lambda:self.load_config(win)).grid(row=8,column=0,pady=(10,0),sticky="w")
+        ttk.Button(frame,text=self.tr("Save configuration…"),command=lambda:self.save_config(win)).grid(row=8,column=1,pady=(10,0),sticky="w")
+        ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("options")).grid(row=8,column=2,pady=(10,0))
+        ttk.Label(frame,text=self.tr("Stop freezes displayed data and keeps the receiver link open."),wraplength=500).grid(row=9,column=0,columnspan=3,sticky="w",pady=(8,0))
+        ttk.Button(frame,text=self.tr("Disconnect receiver"),command=self.receivers.disconnect,state="disabled" if self.worker else "normal").grid(row=10,column=0,sticky="w")
 
     def configured_outputs(self, file, tcp, serial, baud):
         extra = self.imported_outputs
@@ -339,13 +388,14 @@ class Client:
     def rover(self, win):
         frame = ttk.Frame(win,padding=14)
         frame.pack(fill="both",expand=True)
-        ttk.Checkbutton(frame,text=self.tr("Send GGA"),variable=self.send_rover).grid(row=0,column=0,columnspan=6,sticky="w")
+        ttk.Checkbutton(frame,text=self.tr("Send manual rover GGA"),variable=self.send_rover).grid(row=0,column=0,columnspan=6,sticky="w")
+        ttk.Label(frame,text=self.tr("When enabled, manual coordinates override GGA from Bluetooth, serial and TCP sources."),wraplength=580).grid(row=1,column=0,columnspan=6,sticky="w",pady=(2,5))
         for axis,(label,hemispheres) in enumerate((("Latitude",("N","S")),("Longitude",("E","W")))):
-            row = axis + 2
+            row = axis + 3
             ttk.Label(frame,text=self.tr(label)).grid(row=row,column=0,sticky="w",padx=4)
             variables = self.axes[axis]
             for i,name in enumerate(("Decimal degrees","Degrees","Minutes","Seconds")):
-                ttk.Label(frame,text=self.tr(name)).grid(row=1,column=i+1,padx=4)
+                ttk.Label(frame,text=self.tr(name)).grid(row=2,column=i+1,padx=4)
                 entry = ttk.Entry(frame,textvariable=variables[i],width=13 if i in (0,3) else 8)
                 entry.grid(row=row,column=i+1,padx=4,pady=4)
                 entry.bind("<KeyRelease>",lambda _,a=axis,j=i:self.convert(a,j==0))
@@ -353,15 +403,15 @@ class Client:
             box=ttk.Combobox(frame,textvariable=variables[4],values=hemispheres,width=3,state="readonly")
             box.grid(row=row,column=5,padx=4)
             box.bind("<<ComboboxSelected>>",lambda _,a=axis:self.convert(a,False))
-        for row,label,var in ((4,"Ellipsoidal height (m)",self.height),(5,"Geoid separation (m)",self.geoid),
-                              (6,"Manual GGA (optional)",self.raw_gga)):
+        for row,label,var in ((5,"Ellipsoidal height (m)",self.height),(6,"Geoid separation (m)",self.geoid),
+                              (7,"Manual GGA (optional)",self.raw_gga)):
             ttk.Label(frame,text=self.tr(label)).grid(row=row,column=0,sticky="w",padx=4)
             entry=ttk.Entry(frame,textvariable=var)
             entry.grid(row=row,column=1,columnspan=5,sticky="ew",padx=4,pady=4)
-            if row < 6:
+            if row < 7:
                 entry.bind("<FocusOut>",lambda _,v=var:self.format_height(v))
-        ttk.Label(frame,text=self.tr("Geoid separation is optional. If omitted, GGA uses 0.000 m.")).grid(row=7,columnspan=6,sticky="w")
-        ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("rover")).grid(row=8,column=5,pady=(10,0))
+        ttk.Label(frame,text=self.tr("Geoid separation is optional. If omitted, GGA uses 0.000 m.")).grid(row=8,columnspan=6,sticky="w")
+        ttk.Button(frame,text=self.tr("Done"),command=lambda:self.close_window("rover")).grid(row=9,column=5,pady=(10,0))
 
     @staticmethod
     def format_height(variable):
@@ -397,7 +447,9 @@ class Client:
     def map_window(self, win):
         win.geometry("750x570")
         win.minsize(470,330)
-        self.map_view=MapSky(win,self.map_data,self.tr,street="--smoke-test" not in sys.argv)
+        self.map_view=MapSky(win,self.map_data,self.tr,street="--smoke-test" not in sys.argv,
+                             context_key=lambda:(self.caster_key(),self.mount.get().strip().strip("/")),
+                             rover_source=lambda:self.tr("Manual Rover position") if self.send_rover.get() else self.receiver_source)
         self.map_view.pack(fill="both",expand=True)
 
     def caster_key(self):
@@ -406,11 +458,20 @@ class Client:
     def map_data(self):
         mount=self.mount.get().strip().strip("/")
         key=self.caster_key()
-        same_stream=(key,mount)==self.stream_key
+        stream=(key,mount)
+        same_stream=stream==self.stream_key
         position=self.decoder.antenna if same_stream else None
+        position=position or self.station_cache.get(stream)
         if not position and key==self.source_key:
             position=self.mounts.get(mount)
-        return mount, position, self.decoder if same_stream else Decoder(), (tuple(self.values) if None not in self.values else None)
+        manual=None
+        if None not in self.values:
+            try: height=number(self.height.get()) if self.height.get().strip() else None
+            except ValueError: height=None
+            manual=(*self.values,height)
+        rover=manual if self.send_rover.get() and manual else self.receiver_position or manual
+        return mount, position, self.decoder if same_stream else Decoder(), rover
+
 
     def monitor(self, win):
         win.geometry("880x670")
@@ -420,15 +481,31 @@ class Client:
         live=ttk.Frame(tabs); decoder=ttk.Frame(tabs)
         tabs.add(live,text=self.tr("HEX and ASCII"))
         tabs.add(decoder,text=self.tr("RTCM3 decoder"))
-        raw=tk.Text(live,font="TkFixedFont",wrap="none",state="disabled")
-        raw.pack(fill="both",expand=True)
-        types=ttk.Treeview(decoder,columns=("type","count","signals"),show="headings",height=5)
+        panes=ttk.Panedwindow(live,orient="vertical");panes.pack(fill="both",expand=True)
+        caster=ttk.LabelFrame(panes,text=self.tr("Caster → RTCM"));receiver=ttk.LabelFrame(panes,text=self.tr("Receiver → Client"))
+        panes.add(caster,weight=1);panes.add(receiver,weight=2)
+        raw=ScrolledText(caster,font="TkFixedFont",wrap="none",state="disabled",height=6);raw.pack(fill="both",expand=True)
+        self.receiver_choice=ttk.Combobox(receiver,state="readonly");self.receiver_choice.pack(fill="x")
+        self.receiver_raw=ScrolledText(receiver,font="TkFixedFont",wrap="none",state="disabled",height=10);self.receiver_raw.pack(fill="both",expand=True)
+        self.receiver_choice.bind("<<ComboboxSelected>>",lambda _:self.refresh_monitor())
+        decoder_panes=ttk.Panedwindow(decoder,orient="vertical")
+        decoder_panes.pack(fill="both",expand=True)
+        type_frame=ttk.Frame(decoder_panes)
+        detail_frame=ttk.Frame(decoder_panes)
+        decoder_panes.add(type_frame,weight=1)
+        decoder_panes.add(detail_frame,weight=2)
+        self.decoder_panes=decoder_panes
+        types=ttk.Treeview(type_frame,columns=("type","count","signals"),show="headings",height=5)
         for key,name,width in (("type","Message type",115),("count","Count",75),("signals","Signals / details",540)):
             types.heading(key,text=self.tr(name)); types.column(key,width=width,stretch=key=="signals")
-        types.pack(fill="x")
-        selection=ttk.Combobox(decoder,state="readonly")
+        type_scroll=ttk.Scrollbar(type_frame,orient="vertical",command=types.yview)
+        type_scroll.pack(side="right",fill="y")
+        types.configure(yscrollcommand=type_scroll.set)
+        types.pack(fill="both",expand=True)
+        self.types_scroll=type_scroll
+        selection=ttk.Combobox(detail_frame,state="readonly")
         selection.pack(fill="x",pady=5)
-        detail=ttk.Notebook(decoder)
+        detail=ttk.Notebook(detail_frame)
         detail.pack(fill="both",expand=True)
         field_frame=ttk.Frame(detail)
         detail.add(field_frame,text=self.tr("Fields"))
@@ -451,35 +528,70 @@ class Client:
         self.monitor_widgets=(raw,types,selection,field_text,measurements,chart,compact)
         self.monitor_signature=None
         self.detail_signature=None
+        self.decoder_signature=None
+        self.monitor_pinned=None
+        self.monitor_type=None
+        self.frame_choices={}
         types.bind("<<TreeviewSelect>>",lambda _:self.refresh_monitor(reset=True))
-        selection.bind("<<ComboboxSelected>>",lambda _:self.refresh_monitor())
+        selection.bind("<<ComboboxSelected>>",lambda _:self.choose_monitor_frame())
         chart.bind("<Configure>",lambda _:cnr_chart(chart,self.chart_rows,self.tr))
         self.chart_rows=[]
         self.refresh_monitor()
 
+    @staticmethod
+    def combo_posted(combo):
+        try:
+            pop=combo.tk.call("ttk::combobox::PopdownWindow",str(combo))
+            return bool(int(combo.tk.call("winfo","ismapped",pop)))
+        except tk.TclError:
+            return False
+
+    def choose_monitor_frame(self):
+        self.monitor_pinned=self.frame_choices.get(self.monitor_widgets[2].get())
+        self.refresh_monitor()
+
     def refresh_monitor(self,reset=False):
-        if not self.monitor_widgets:
-            return
+        if not self.monitor_widgets:return
         raw,types,select,field_text,table,chart,compact=self.monitor_widgets
-        signature=self.bytes,self.decoder.bad_crc
+        source=self.receiver_choice.get()
+        signature=(self.bytes,tuple((key,value[0]) for key,value in self.receiver_streams.items()),source)
         if signature!=self.monitor_signature:
             self.monitor_signature=signature
             replace_text(raw,f"{self.bytes:,} {self.tr('bytes received')}\n\n{hex_preview(self.recent)}")
+            names=sorted(self.receiver_streams)
+            if not self.combo_posted(self.receiver_choice):
+                self.receiver_choice.configure(values=names)
+                if source not in names:
+                    source=names[0] if names else "";self.receiver_choice.set(source)
+            count,data=self.receiver_streams.get(source,(0,b""))
+            ascii_text="".join(chr(b) if 32<=b<127 or b in (10,13) else "." for b in data)
+            text=f"{count:,} {self.tr('bytes received')}\nASCII\n{ascii_text}\n\nHEX + ASCII (latest 256 bytes)\n{hex_preview(data[-256:])}" if data else self.tr("Waiting for receiver data")
+            replace_text(self.receiver_raw,text)
+        decoder_signature=(id(self.decoder),tuple(self.decoder.counts.items()),self.decoder.bad_crc)
+        if decoder_signature!=self.decoder_signature:
+            self.decoder_signature=decoder_signature
             for item in types.get_children():
-                if int(item) not in self.decoder.counts:
-                    types.delete(item)
+                if int(item) not in self.decoder.counts:types.delete(item)
             for kind in sorted(self.decoder.counts):
                 values=(kind,self.decoder.counts[kind],", ".join(sorted(self.decoder.signals[kind])))
-                if types.exists(str(kind)): types.item(str(kind),values=values)
-                else: types.insert("","end",iid=str(kind),values=values)
+                if types.exists(str(kind)):types.item(str(kind),values=values)
+                else:types.insert("","end",iid=str(kind),values=values)
         chosen=types.selection()
-        frames=list(reversed(self.decoder.frames.get(int(chosen[0]),()))) if chosen else []
-        current=select.get()
+        selected_type=int(chosen[0]) if chosen else None
+        if selected_type!=self.monitor_type:
+            self.monitor_type=selected_type;self.monitor_pinned=None
+            select.set(self.tr("Latest frame") if chosen else "")
+        frames=list(reversed(self.decoder.frames.get(selected_type,()))) if chosen else []
+        if self.monitor_pinned and all(row[0]!=self.monitor_pinned[0] for row in frames):frames.append(self.monitor_pinned)
         latest=self.tr("Latest frame")
         names=[latest]+[f"#{n} · {at:%H:%M:%S}" for n,at,_,_ in frames]
-        select.configure(values=names if frames else ())
-        select.set(current if current in names and not reset and frames else latest if frames else "")
-        row=frames[names.index(select.get())-1] if frames and select.get()!=latest else frames[0] if frames else None
+        if not self.combo_posted(select):
+            self.frame_choices={name:row for name,row in zip(names[1:],frames)}
+            if tuple(select.cget("values"))!=tuple(names if frames else ()):
+                select.configure(values=names if frames else ())
+            if not frames:select.set("")
+            elif not self.monitor_pinned:select.set(latest)
+        row=self.monitor_pinned or (frames[0] if frames else None)
         detail_signature=(int(chosen[0]),row[0],row[1]) if row else None
         if detail_signature==getattr(self,"detail_signature",None) and not reset:
             return
@@ -543,10 +655,16 @@ class Client:
             messagebox.showerror("NTRIP Scope",self.tr(str(error)),parent=self.root)
             return
         if not list_only:
+            if self.stream_key!=(key,mount):self.receiver_position=None
+            self.receiver_parsers={}
+            self.receiver_fix.reset()
+            self.monitor_pinned=None
             self.decoder=Decoder()
             self.stream_key=(key,mount)
             self.bytes=0; self.last=0; self.started=0; self.recent=b""
+            self.receiver_streams = {}
         self.outputs=[]
+        self.receiver_error=""
         self.stopped.clear()
         self.status="Connecting…"
         def emit(kind,value):
@@ -558,11 +676,11 @@ class Client:
                     continue
         def worker():
             try:
-                run(config,self.stopped,emit,list_only=list_only,gga=sentence,outputs=outputs)
+                run(config,self.stopped,emit,list_only=list_only,gga=sentence,outputs=outputs,receivers=self.receivers)
             except Cancelled:
                 pass
             except Exception as error:
-                emit("status",str(error))
+                emit("receiver_error" if "Receiver" in str(error) else "status",str(error))
             finally:
                 self.events.put(("finished",key))
         self.worker=threading.Thread(target=worker,daemon=True)
@@ -573,6 +691,7 @@ class Client:
         if self.worker:
             self.status="Stop requested…"
             self.stopped.set()
+            self.receivers.pause()
         else:
             self.start()
 
@@ -585,8 +704,18 @@ class Client:
         status=self.tr(self.status)
         if self.outputs:
             status+=" · "+" · ".join(self.outputs)
+        if self.receiver_error:status+=" · "+self.receiver_error
         self.status_label.configure(text=status)
         now=time.monotonic()
+        fix_text,fix_color=self.receiver_fix.display(now,bool(self.worker) and not self.stopped.is_set())
+        text=self.tr("Receiver fix")+": "+(self.tr(fix_text) if self.receiver_fix.quality is None else fix_text)
+        note=self.tr("Manual GGA is sent to the caster; receiver fix is shown separately.") if self.send_rover.get() else ""
+        changed=self.fix_label.cget("text")!=text or self.fix_note.cget("text")!=note
+        self.fix_label.configure(text=text,foreground=fix_color)
+        self.fix_note.configure(text=note)
+        if changed:
+            self.root.update_idletasks()
+            self.root.minsize(608,max(300,self.main.winfo_reqheight()))
         lit=int((now-self.started)/.12)%13 if self.worker and now-self.last<2.5 else 0
         for index,seg in enumerate(self.segments):
             self.bar.itemconfigure(seg,fill="#24a65a" if index<lit else "#cbd5db")
@@ -599,6 +728,7 @@ class Client:
                 kind,value=self.events.get_nowait()
             except queue.Empty:
                 break
+            if kind in ("data","receiver") and (self.stopped.is_set() or not self.worker):continue
             if kind=="data":
                 now=time.monotonic()
                 if now-self.last>=2.5:
@@ -607,7 +737,20 @@ class Client:
                 self.bytes+=len(value)
                 self.recent=(self.recent+value)[-256:]
                 self.decoder.feed(value)
+                if self.decoder.antenna is not None:
+                    self.station_cache[self.stream_key]=self.decoder.antenna
+                    if len(self.station_cache)>100:self.station_cache={self.stream_key:self.decoder.antenna}
                 self.status="Receiving data"
+            elif kind=="receiver":
+                source, data = value
+                self.receiver_fix.feed(source,data,time.monotonic())
+                count, recent = self.receiver_streams.get(source, (0, b""))
+                self.receiver_streams[source] = (count + len(data), (recent + data)[-8192:])
+                for sentence in self.receiver_parsers.setdefault(source,GGAReader()).feed(data):
+                    position=position_from_gga(sentence)
+                    if position is not None:self.receiver_position=position;self.receiver_source=source
+            elif kind=="receiver_error":
+                self.receiver_error=value;self.status=value
             elif kind=="mounts":
                 self.mounts=value
                 self.source_key=self.caster_key()
@@ -643,6 +786,7 @@ def main():
         client.open("rover","Rover position",client.rover)
         client.open("live","Live stream",client.monitor)
         client.open("options","Options",client.options)
+        client.open_about()
         client.open("map","Map & sky",client.map_window)
         if len(sys.argv) == 3:
             original_dialog = filedialog.askopenfilename

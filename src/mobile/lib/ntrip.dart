@@ -5,20 +5,79 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'config.dart';
+import 'gga.dart';
 
 class NtripSession {
   Socket? _socket;
+  ConnectionTask<Socket>? _connecting;
+  _Input? _input;
+  final _cancelled = Completer<void>();
+  bool releaseReceiverOnStop = false;
   Timer? _ggaTimer;
   bool _stopped = false;
   bool get stopped => _stopped;
+  var _externalReader = GgaReader();
+  final void Function(String)? onGgaSource;
+  String? _externalGga;
+  DateTime? _externalReceived;
+  DateTime? _externalSent;
+  Rover? _manualRover;
+  bool _streaming = false;
 
-  void stop() {
+  NtripSession({this.onGgaSource});
+
+  void receiveExternal(List<int> bytes) {
+    if (_stopped) return;
+    for (final sentence in _externalReader.add(bytes)) {
+      _externalGga = sentence;
+      _externalReceived = DateTime.now();
+    }
+    _sendExternal();
+  }
+
+  void externalDisconnected() {
+    _externalReader = GgaReader();
+    _externalGga = null;
+    _externalReceived = null;
+  }
+
+  void _sendExternal() {
+    final now = DateTime.now();
+    if (!_streaming ||
+        _manualRover != null ||
+        _stopped ||
+        _externalGga == null ||
+        _socket == null ||
+        (_externalSent != null &&
+            now.difference(_externalSent!).inMilliseconds < 1000))
+      return;
+    final sentence = _externalGga!;
+    _externalGga = null;
+    if (_externalReceived == null ||
+        now.difference(_externalReceived!).inSeconds >= 5)
+      return;
+    _socket!.add(ascii.encode('$sentence\r\n'));
+    _externalSent = now;
+    onGgaSource?.call('GGA from receiver → caster');
+  }
+
+  void stop({bool releaseReceiver = false}) {
+    releaseReceiverOnStop |= releaseReceiver;
     _stopped = true;
+    if (!_cancelled.isCompleted) _cancelled.complete();
     _close();
   }
 
   void _close() {
+    _streaming = false;
+    externalDisconnected();
     _ggaTimer?.cancel();
+    _ggaTimer = null;
+    _connecting?.cancel();
+    _connecting = null;
+    final input = _input;
+    _input = null;
+    if (input != null) unawaited(input.cancel().catchError((Object _) {}));
     _socket?.destroy();
     _socket = null;
   }
@@ -46,24 +105,40 @@ class NtripSession {
     if (!list && caster.mount.trim().isEmpty)
       throw const FormatException('Choose a mountpoint');
     if (_stopped) return;
+    _manualRover = list ? null : caster.rover;
     const connectTimeout = Duration(seconds: 8);
-    final socket = caster.tls
-        ? await SecureSocket.connect(
-            caster.host,
-            caster.port,
-            timeout: connectTimeout,
-          )
-        : await Socket.connect(
-            caster.host,
-            caster.port,
-            timeout: connectTimeout,
-          );
+    var abandoned = false;
+    final taskFuture = caster.tls
+        ? SecureSocket.startConnect(caster.host, caster.port)
+        : Socket.startConnect(caster.host, caster.port);
+    final socketFuture = taskFuture.then<Socket>((task) async {
+      _connecting = task;
+      if (_stopped || abandoned) task.cancel();
+      final socket = await task.socket;
+      if (_stopped || abandoned) socket.destroy();
+      return socket;
+    });
+    final socket = await Future.any<Socket>([
+      socketFuture.timeout(
+        connectTimeout,
+        onTimeout: () {
+          abandoned = true;
+          _connecting?.cancel();
+          throw TimeoutException('Caster connection timed out');
+        },
+      ),
+      _cancelled.future.then<Socket>(
+        (_) => throw const SocketException('NTRIP connection cancelled'),
+      ),
+    ]);
+    _connecting = null;
     if (_stopped) {
       socket.destroy();
       return;
     }
     _socket = socket;
     final input = _Input(socket.timeout(const Duration(seconds: 30)));
+    _input = input;
     try {
       final host = caster.host.contains(':') ? '[${caster.host}]' : caster.host;
       final path = list
@@ -116,13 +191,21 @@ class NtripSession {
           )) {
         throw const FormatException('Caster returned a sourcetable');
       }
+      _streaming = !list;
       if (rover != null) {
+        onGgaSource?.call('Manual rover GGA → caster');
         void send() {
           if (!_stopped) socket.add(ascii.encode('${rover.gga()}\r\n'));
         }
 
         send();
         _ggaTimer = Timer.periodic(const Duration(seconds: 10), (_) => send());
+      } else if (!list) {
+        _sendExternal();
+        _ggaTimer = Timer.periodic(
+          const Duration(seconds: 1),
+          (_) => _sendExternal(),
+        );
       }
 
       if ((response['transfer-encoding'] ?? '').toLowerCase().contains(
@@ -222,5 +305,6 @@ class _Input {
     return result;
   }
 
-  Future<void> cancel() => _packets.cancel();
+  Future<void>? _cancelFuture;
+  Future<void> cancel() => _cancelFuture ??= _packets.cancel();
 }

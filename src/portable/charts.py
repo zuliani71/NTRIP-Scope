@@ -57,9 +57,11 @@ def cnr_chart(canvas, rows, tr):
 
 
 class MapSky(ttk.Frame):
-    def __init__(self, parent, provider, tr, *, street=True):
+    def __init__(self, parent, provider, tr, *, street=True, context_key=None, rover_source=None):
         super().__init__(parent, padding=10)
         self.provider, self.tr = provider, tr
+        self.context_key=context_key
+        self.rover_source=rover_source or (lambda: "")
         self.station = self.center = self.rover = None
         self.map_key = None
         self.scale = 8.0
@@ -85,6 +87,7 @@ class MapSky(ttk.Frame):
         ttk.Button(controls, text=tr("Offline map"), command=lambda: self.change_map(False)).pack(side="left", padx=(0,8))
         ttk.Button(controls, text="+", width=4, command=lambda: self.zoom(2)).pack(side="left")
         ttk.Button(controls, text="−", width=4, command=lambda: self.zoom(.5)).pack(side="left")
+        ttk.Button(controls, text=tr("Show both"), command=self.fit_current).pack(side="left", padx=(5,0))
         ttk.Button(controls, text=tr("Open detailed map"), command=self.open_browser).pack(side="right")
         self.canvas = Canvas(self.map, background=BG, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -105,28 +108,36 @@ class MapSky(ttk.Frame):
 
     def refresh(self):
         name, position, decoder, rover = self.provider()
-        self.station = position
-        key = name, position[:2] if position else None
-        if key != self.map_key or rover != self.rover:
-            self.map_key, self.rover = key, rover
-            self.center = position[:2] if position else None
-            if position and rover:
-                self.fit_baseline(position[:2], rover)
-            self.draw_map()
-        if position:
-            lat, lon = position[:2]
-            def sexagesimal(angle, positive, negative):
-                d, m, s = dms(angle)
-                return f"{d}° {m:02d}′ {s:07.4f}″ {negative if angle < 0 else positive}"
-            height = f"{position[2]:.3f} m" if len(position) == 3 else self.tr("Unavailable")
-            self.coordinates.configure(text=(
-                f"{self.tr('Latitude')} {lat:.6f}°  ·  {sexagesimal(lat, 'N', 'S')}\n"
-                f"{self.tr('Longitude')} {lon:.6f}°  ·  {sexagesimal(lon, 'E', self.tr('W'))}\n"
-                f"{self.tr('Ellipsoidal height')}  {height}"))
-        else:
-            self.coordinates.configure(text="")
-        if self.tabs.select() == str(self.sky):
-            self.draw_sky(decoder)
+        changed=position!=self.station or rover!=self.rover
+        self.station,self.rover=position,rover
+        key=self.context_key() if self.context_key else name
+        if key!=self.map_key:
+            self.map_key=key;self.center=None
+        if self.center is None and position:
+            self.center=position[:2]
+            if rover:self.fit_baseline(position[:2],rover)
+            changed=True
+        if changed:self.draw_map()
+        def describe(title,point):
+            lat,lon=point[:2]
+            def sexagesimal(angle,positive,negative):
+                d,m,seconds=dms(angle)
+                return f"{d}° {m:02d}′ {seconds:07.4f}″ {negative if angle<0 else positive}"
+            height=f"{point[2]:.3f} m" if len(point)>2 and point[2] is not None else self.tr("Unavailable")
+            return (f"{title}\n{self.tr('Latitude')} {lat:.6f}° · {sexagesimal(lat,'N','S')}\n"
+                    f"{self.tr('Longitude')} {lon:.6f}° · {sexagesimal(lon,'E',self.tr('W'))}\n"
+                    f"{self.tr('Ellipsoidal height')} {height}")
+        blocks=[]
+        if position:blocks.append(describe(self.tr("Mountpoint"),position))
+        if rover:blocks.append(describe("Rover"+(" · "+self.rover_source() if self.rover_source() else ""),rover))
+        if position and rover:blocks.append(f"{self.tr('Distance from mountpoint')}: {horizontal_distance(position,rover):.3f} km")
+        self.coordinates.configure(text="\n\n".join(blocks))
+        if self.tabs.select()==str(self.sky):self.draw_sky(decoder)
+
+    def fit_current(self):
+        if self.station and self.rover:self.fit_baseline(self.station[:2],self.rover)
+        elif self.station:self.center=self.station[:2]
+        self.draw_map()
 
     def fit_baseline(self, station, rover):
         lat, lon = station
@@ -205,7 +216,7 @@ class MapSky(ttk.Frame):
         slat, slon = self.station[:2]
         x, y = pixel(lon + (slon-lon+180)%360-180, slat)
         if self.rover:
-            rlat, rlon = self.rover
+            rlat, rlon = self.rover[:2]
             rx, ry = pixel(lon+(rlon-lon+180)%360-180, rlat)
             self.draw_baseline(x,y,rx,ry)
         self.map_overlay(w, h, x, y, 111.32 * max(.001, math.cos(math.radians(lat))) / scale,
@@ -245,7 +256,7 @@ class MapSky(ttk.Frame):
         sx, sy = project(*self.station[:2], z)
         sx = x + (sx-x+128*world)%(256*world)-128*world
         if self.rover:
-            rx, ry = project(*self.rover,z)
+            rx, ry = project(*self.rover[:2],z)
             rx = x + (rx-x+128*world)%(256*world)-128*world
             self.draw_baseline(sx-left,sy-top,rx-left,ry-top)
         self.map_overlay(w,h,sx-left,sy-top,40075.017*math.cos(math.radians(lat))/(256*world),

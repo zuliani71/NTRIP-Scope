@@ -4,25 +4,48 @@
 
 NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. A mobile diagnostic client is available for Android. A development preview for iPhone and iPad can be built from source with Xcode. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
 
+## What is new
+
+### Desktop 1.35 and command-line 1.32
+
+- Bidirectional receiver connections send RTCM to the receiver and forward checksum-valid GGA to the caster for VRS. macOS uses native RFCOMM for HC-06; Windows/Linux use the serial ports exposed by the operating system. Enabled manual rover coordinates take priority.
+- Separate caster and receiver HEX/ASCII panels make both directions readable. RTCM latest-frame updates and historical selection remain independent of receiver traffic.
+- RTCM Fields, Measurements and C/N₀ views, resizable upper/lower decoder panes and an upper-list scrollbar on Windows/Linux. Decoded field coverage varies by decoder and message type.
+- **Receiver fix** reports GGA quality (including NO FIX, RTK FLOAT and RTK FIXED), source, age, stale and paused states. It reports receiver quality, not an independent accuracy estimate.
+- Maps show the mountpoint, receiver/manual rover, connecting line and distance, coordinate formats and ellipsoidal height when known. Rover updates preserve zoom; **Show both** fits the two positions.
+- Map & sky and Live stream are independent desktop windows. On macOS they remain open when another app gains focus. Initial decoder layout and left alignment have been corrected.
+- Compact header with icon, visible version, author/GitHub information; shared INI import/export. Stop freezes views and preserves the last station for the same caster/mountpoint; **Disconnect receiver** explicitly releases the receiver.
+- CLI 1.32 supports receiver GGA through bidirectional serial/SPP, with native macOS HC-06 RFCOMM. Standard output remains the default RTCM destination; file/TCP/serial destinations can run together.
+
+### Android 0.4.2
+
+- Bidirectional Bluetooth Classic SPP, file and TCP outputs can run together. Separate receiver/caster inspection, receiver fix status and manual-GGA priority are available.
+- RTCM Fields/Measurements, per-satellite/signal C/N₀ chart and GPS sky plot. Sky requires healthy RTCM 1019 ephemerides and a GPS MSM epoch; other constellations are not plotted.
+- Optional **Keep streaming with screen off** uses a foreground service and a notification with Stop. When disabled, backgrounding closes the caster and outputs; cleanup is serialized before reconnection. Phone power settings may restrict background operation.
+- Configuration saving can select an existing file, confirm replacement, or reuse its name to save a new copy. Exported configurations omit passwords.
+- First map opening now initializes the camera without requiring pan or zoom to complete tile display; zoom is preserved when the rover moves.
+
+Validation: desktop packages passed the recorded macOS checks and Windows/Linux GUI and executable checks (Windows 11, Ubuntu ARM64 and x64). Android 0.4.2 passed 40 Flutter tests; the unchanged native shutdown/file/service code passed 13 tests in 0.4.1, including simulated Android 16 cases. The user confirmed screen-off streaming on a real phone with 0.4.0. Receiver-specific reconnection after standby still needs physical-device confirmation. No new iOS binary is provided in this update.
+
 ## Downloads
 
 ### Desktop client
 
-Choose the package for your system from the [v1.13 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.13).
+Choose the package for your system from the [v1.35 release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/v1.35).
 
 | Platform | Package |
 |---|---|
-| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-macos-arm64-1.13.zip) |
-| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-windows-x64-1.13.zip) |
-| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-linux-arm64-1.13.tar.gz) |
-| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/NTRIP-Scope-linux-x64-1.13.tar.gz) |
+| macOS 13+ on Apple Silicon | [Download macOS ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-macos-arm64-1.35.zip) |
+| Windows x64 | [Download Windows x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-windows-x64-1.35.zip) |
+| Linux ARM64 · Ubuntu in Parallels on Apple Silicon | [Download Linux ARM64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-linux-arm64-1.35.tar.gz) |
+| Linux x64 · Intel or AMD | [Download Linux x64](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/NTRIP-Scope-linux-x64-1.35.tar.gz) |
 
 On Linux, run `uname -m` to check your architecture. Use ARM64 for `aarch64` and x64 for `x86_64`. The Linux x64 build targets Ubuntu 22.04 or compatible systems. The Linux ARM64 build targets Ubuntu 24.04 or compatible systems.
 
 ### Command-line client
 
-Download [ntripscope-1.13.zip](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.13/ntripscope-1.13.zip)
-and extract it on macOS, Windows or Linux. It requires Python 3.10 or later.
+Download the [cross-platform Python source package (CLI 1.32)](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-1.32-sorgenti.zip), which requires Python 3.10+ and the dependencies in `src/portable/requirements.txt`. Standalone Windows/Linux executables are included in the desktop packages. A [standalone macOS ARM64 CLI](https://github.com/zuliani71/NTRIP-Scope/releases/download/v1.35/ntripscope-macos-arm64-1.32.zip) is also available.
+
 From the extracted folder, run:
 
 ```sh
@@ -40,22 +63,15 @@ Build a standalone executable on the target system with
 
 ### Android client
 
-[Download the Android 0.1.4 preview APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.4/NTRIP-Scope-Android-0.1.4-debug.apk). It requires Android 7.0 or later. Open the downloaded APK on your phone to install it. Android may ask you to allow installation from the app you used to open the file.
+[Download Android 0.4.2 APK](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.4.2/NTRIP-Scope-Android-0.4.2.apk) (Android 7.0+). Open it on the phone and allow installation from the app used to open the file if requested. Builds from 0.1.5 onward share the same signing certificate. The old 0.1.4 preview used a different certificate: export settings and uninstall that preview before installing the new APK.
 
-The Android client runs in the foreground and supports mountpoint discovery, rover GGA for VRS, live HEX and ASCII, RTCM3 decoding, and capture export. It can load and save the same INI format used by the desktop and command-line clients. See the [mobile source and build instructions](src/mobile/README.md).
-
-- **File output** writes RTCM directly to a document selected before connecting.
-- **TCP server** streams RTCM to one client at a time. It listens on the phone only by default, with an option to accept clients on the local network.
-- **Bluetooth Classic (SPP)** forwards RTCM to a paired receiver. File and TCP were tested together in the emulator. Bluetooth byte forwarding was tested with a simulated platform channel, with physical SPP validation pending.
-- **About** displays the installed version, author, license and GitHub link.
-
-Outputs can run together while RTCM3 diagnostics remain available. USB serial is planned.
+Android supports simultaneous file, TCP server and paired Bluetooth Classic SPP outputs, receiver GGA uplink, live diagnostics, maps and GPS sky. USB serial is not implemented. See the [mobile guide](src/mobile/README.md) and [Android release notes](https://github.com/zuliani71/NTRIP-Scope/releases/tag/android-v0.4.2).
 
 ### iPhone and iPad client
 
 The development preview supports iOS and iPadOS 15 or later. Build and install it from source on your own device using Xcode and your Apple Account. The app has launched in the iPhone simulator and installed on a physical iPhone. The first launch on the physical device still needs verification.
 
-The [0.1.4 simulator build](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.4/NTRIP-Scope-iOS-0.1.4-Simulator.zip) includes the new About screen. For a physical device, see the [installation and troubleshooting guide for iPhone and iPad](src/mobile/README.md#iphone-e-ipad).
+The historical [0.1.4 simulator build](https://github.com/zuliani71/NTRIP-Scope/releases/download/android-v0.1.4/NTRIP-Scope-iOS-0.1.4-Simulator.zip) includes the new About screen. For a physical device, see the [installation and troubleshooting guide for iPhone and iPad](src/mobile/README.md#iphone-e-ipad).
 
 ## Screenshots
 
@@ -72,11 +88,14 @@ The [0.1.4 simulator build](https://github.com/zuliani71/NTRIP-Scope/releases/do
 | Capability | Desktop client | Command-line client |
 |---|---|---|
 | NTRIP connection | NTRIP 1.0 and 2.0, authentication, TLS and mountpoint selection from the sourcetable | NTRIP 1.0 and 2.0, authentication, TLS and mountpoint listing with `--list` |
-| Rover position for VRS | Decimal and sexagesimal coordinate entry with automatic conversion and periodic GGA | Decimal coordinates via arguments or INI and periodic GGA |
+| Rover position for VRS | Decimal and sexagesimal coordinate entry with automatic conversion and periodic GGA | Decimal coordinates via arguments/INI, or receiver GGA over bidirectional serial/SPP; manual coordinates take priority |
 | RTCM outputs | Optional file, local TCP and serial outputs. Monitor with all outputs disabled | Raw binary RTCM on standard output by default. Repeatable file, TCP and serial destinations, with optional simultaneous standard output |
-| Shared configuration | Import an INI from **Options → Load configuration…** in version 1.11 | Read an INI with `--config`. Command-line options override corresponding file settings |
+| Shared configuration | Import/export INI with **Options → Load/Save configuration…** | Read an INI with `--config`. Command-line options override corresponding file settings |
 | Stream inspection | Live HEX and ASCII, CRC checks, frame history, RTCM3 fields, MSM measurements and a C/N₀ chart | Raw stream for processing by scripts or external decoders. Status and errors go to standard error |
+| Receiver diagnostics | Separate caster/receiver HEX and ASCII; GGA fix status, source and age | Receiver GGA uplink; headless operation, no GUI decoder or charts |
 | Map and GPS sky | Separate windows with street and offline maps, scale, rover-to-mountpoint distance and GPS tracks when ephemerides are available | Headless operation for scripts and automated workflows |
+
+Android additionally offers the graphical decoder, C/N₀ chart, map/GPS sky, INI import/export, file/TCP/Bluetooth outputs and the optional screen-off service described above. It does not provide a command-line interface or USB serial. iOS remains a development preview with BLE rather than generic Classic SPP.
 
 The street map uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch.
 

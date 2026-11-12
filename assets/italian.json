@@ -200,5 +200,21 @@
   "Version": "Versione",
   "Software: MIT License": "Software con licenza MIT",
   "Original published project materials: CC BY 4.0 unless indicated otherwise.": "Materiali originali pubblicati dal progetto con licenza CC BY 4.0, salvo diversa indicazione.",
-  "Open on GitHub": "Apri su GitHub"
+  "Open on GitHub": "Apri su GitHub",
+  "Serial / Bluetooth SPP (RTCM out, GGA in)": "Seriale / Bluetooth SPP (RTCM in uscita, GGA in ingresso)",
+  "Manual rover GGA has priority over received serial/Bluetooth GGA.": "La posizione rover manuale attiva ha priorità sulla GGA ricevuta.",
+  "GGA → caster (serial / Bluetooth)": "GGA → caster (seriale / Bluetooth)",
+  "Manual Rover position": "Posizione rover manuale",
+  "Send manual rover GGA": "Invia GGA manuale rover",
+  "When enabled, manual coordinates override GGA from Bluetooth, serial and TCP sources.": "Quando abilitate, le coordinate manuali hanno priorità sulle GGA da Bluetooth, seriale e TCP.",
+  "Stop freezes displayed data and keeps the receiver link open.": "Stop congela i dati visualizzati e mantiene aperto il collegamento al ricevitore.",
+  "Disconnect receiver": "Disconnetti ricevitore",
+  "Caster → RTCM": "Caster → RTCM",
+  "Receiver → Client": "Ricevitore → Client",
+  "Waiting for receiver data": "In attesa di dati dal ricevitore",
+  "Show both": "Mostra entrambi",
+  "Distance from mountpoint": "Distanza dal mountpoint",
+  "Receiver fix": "Fix ricevitore",
+  "Waiting for receiver GGA": "In attesa della GGA del ricevitore",
+  "Manual GGA is sent to the caster; receiver fix is shown separately.": "Al caster viene inviata la GGA manuale; il fix mostrato è quello del ricevitore."
 }

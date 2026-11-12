@@ -9,6 +9,8 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    testOptions { unitTests { isIncludeAndroidResources = true } }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -29,6 +31,15 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        val localDebugKey = rootProject.file("../.local-signing/debug.keystore")
+        if (localDebugKey.exists()) {
+            getByName("debug") {
+                storeFile = localDebugKey
+            }
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
@@ -46,4 +57,15 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
+}
+
+// Android host tests package Flutter assets just like the app variant.
+tasks.matching { it.name.startsWith("package") && it.name.endsWith("UnitTestForUnitTest") }.configureEach {
+    val variant = name.removePrefix("package").removeSuffix("UnitTestForUnitTest")
+    dependsOn("copyFlutterAssets$variant")
 }

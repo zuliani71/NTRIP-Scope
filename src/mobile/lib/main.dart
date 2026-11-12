@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -15,6 +16,16 @@ import 'config.dart';
 import 'ntrip.dart';
 import 'outputs.dart';
 import 'rtcm.dart';
+import 'geo.dart';
+import 'map_view.dart';
+import 'live_stream_view.dart';
+import 'rover_angle_editor.dart';
+import 'cnr_chart.dart';
+import 'sky.dart';
+import 'traffic_bar.dart';
+import 'receiver_fix.dart';
+import 'background_streaming.dart';
+import 'configuration_save.dart';
 
 void main() => runApp(const ScopeApp());
 
@@ -46,8 +57,23 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   final height = TextEditingController(text: '0.000');
   final geoid = TextEditingController(text: '0.000');
   final preview = <int>[];
+  final receiverPreviews = <String, List<int>>{};
+  final receiverCounts = <String, int>{};
   RtcmDecoder decoder = RtcmDecoder();
+  final fixModel = ReceiverFixModel();
+  final fixRevision = ValueNotifier<int>(0);
+  final frameListScroll = ScrollController();
   final rtcmRevision = ValueNotifier<int>(0);
+  final trafficRevision = ValueNotifier<int>(0);
+  final mapModel = RoverMapModel();
+  final skyRevision = ValueNotifier<SkySnapshot>(const SkySnapshot());
+  final mapRevision = ValueNotifier<GeoSnapshot>(const GeoSnapshot());
+  Timer? receiverRedraw;
+  String appVersion = '';
+  DateTime? lastCasterAt;
+  String? receiverError;
+  bool receiverLinked = false;
+  int decoderRevision = 0;
   NtripSession? session;
   File? capture;
   StreamOutputs? activeOutputs;
@@ -55,6 +81,16 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   String? bluetoothAddress;
   String? bluetoothName;
   String? outputNotice;
+  String? ggaNotice;
+  final bleService = TextEditingController(
+    text: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  );
+  final bleWrite = TextEditingController(
+    text: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+  );
+  final bleRead = TextEditingController(
+    text: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+  );
   final tcpPort = TextEditingController(text: '5000');
   bool forwardTcp = false;
   bool allowNetwork = false;
@@ -68,26 +104,75 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   var sendRover = false;
   var record = false;
   var readingSettings = false;
-  bool get busy => session != null || readingSettings;
+  bool get _androidBackground =>
+      defaultTargetPlatform == TargetPlatform.android;
+  String configurationName = "ntripscope.ini";
+  bool keepStreaming = false;
+  bool _hidden = false, _disposing = false;
+  int _shutdowns = 0;
+  Completer<void>? _sessionDone;
+  BackgroundStreaming? _backgroundLease;
+  static const _lifecycleChannel = MethodChannel('ntripscope/lifecycle');
+  bool get busy => session != null || readingSettings || _shutdowns > 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _lifecycleChannel.setMethodCallHandler((call) async {
+      if (call.method == 'suspend') {
+        _hidden = true;
+        if (_backgroundLease?.ready != true)
+          await stopSession(releaseReceiver: true);
+      } else if (call.method == 'stop') {
+        await stopSession(releaseReceiver: true);
+      }
+    });
+    for (final input in [latitude, longitude, height]) {
+      input.addListener(refreshManualMap);
+    }
+    unawaited(loadLocalSettings());
+    PackageInfo.fromPlatform()
+        .then((package) {
+          if (mounted) setState(() => appVersion = package.version);
+        })
+        .catchError((Object _) {});
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) stopSession();
+    if (state == AppLifecycleState.resumed) {
+      _hidden = false;
+      if (mounted) setState(() {});
+    } else if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _hidden = true;
+      if (state == AppLifecycleState.detached ||
+          _backgroundLease?.ready != true) {
+        unawaited(stopSession(releaseReceiver: true));
+      }
+    }
   }
 
   @override
   void dispose() {
+    _disposing = true;
     WidgetsBinding.instance.removeObserver(this);
-    stopSession();
+    _lifecycleChannel.setMethodCallHandler(null);
+    unawaited(stopSession(releaseReceiver: true));
+    receiverRedraw?.cancel();
+    trafficRevision.dispose();
+    mapRevision.dispose();
+    skyRevision.dispose();
     tcpPort.dispose();
+    bleService.dispose();
+    bleWrite.dispose();
+    bleRead.dispose();
     redraw?.cancel();
     rtcmRevision.dispose();
+    frameListScroll.dispose();
+    fixRevision.dispose();
     for (final field in [
       host,
       port,
@@ -149,6 +234,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         longitude.text = rover?.longitude.toStringAsFixed(6) ?? '';
         height.text = rover?.height.toStringAsFixed(3) ?? '0.000';
         geoid.text = rover?.geoid.toStringAsFixed(3) ?? '0.000';
+        configurationName = picked.files.single.name;
         status = 'Configuration loaded';
       });
     } catch (error) {
@@ -185,11 +271,19 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     setState(() => readingSettings = true);
     try {
       final bytes = Uint8List.fromList(utf8.encode(currentConfig().toIni()));
-      final destination = await FilePicker.platform.saveFile(
-        fileName: 'ntripscope.ini',
-        bytes: bytes,
-      );
+      final destination = Platform.isAndroid
+          ? await saveConfigurationFile(
+              context,
+              bytes,
+              initialName: configurationName,
+            )
+          : await FilePicker.platform.saveFile(
+              fileName: configurationName,
+              bytes: bytes,
+            );
       if (destination != null) {
+        if (Platform.isAndroid) configurationName = destination;
+        unawaited(saveLocalSettings());
         showStatus(
           password.text.isEmpty
               ? 'Configuration saved'
@@ -243,15 +337,170 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     if (mounted) setState(() => outputNotice = message);
   }
 
-  void stopSession() {
-    session?.stop();
-    final outputs = activeOutputs;
-    if (outputs != null)
-      unawaited(
-        outputs.close().catchError((Object error) {
-          outputStatus(errorText(error));
+  void showMap() {
+    final key =
+        '${host.text.trim().toLowerCase()}|${port.text.trim()}|$tls|${mount.text.trim()}';
+    if (!busy && mapModel.key != key) {
+      mapModel.begin(key, null);
+      skyRevision.value = const SkySnapshot();
+      mapModel.stop();
+      refreshManualMap();
+      mapRevision.value = mapModel.snapshot;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ScopeMapScreen(
+          positions: mapRevision,
+          sky: skyRevision,
+          name: mount.text.trim(),
+        ),
+      ),
+    );
+  }
+
+  void refreshManualMap() {
+    if (!mounted || busy) return;
+    final lat = double.tryParse(latitude.text.replaceAll(',', '.')),
+        lon = double.tryParse(longitude.text.replaceAll(',', '.')),
+        h = double.tryParse(height.text.replaceAll(',', '.'));
+    mapModel.manual =
+        sendRover &&
+            lat != null &&
+            lon != null &&
+            lat.isFinite &&
+            lon.isFinite &&
+            lat.abs() <= 90 &&
+            lon.abs() <= 180
+        ? GeoPosition(lat, lon, h?.isFinite == true ? h : null)
+        : null;
+    mapRevision.value = mapModel.snapshot;
+  }
+
+  Future<File> localSettingsFile() async => File(
+    '${(await getApplicationSupportDirectory()).path}/receiver-settings.json',
+  );
+  Future<void> loadLocalSettings() async {
+    try {
+      final values =
+          jsonDecode(await (await localSettingsFile()).readAsString()) as Map;
+      if (!mounted || host.text.isNotEmpty) return;
+      setState(() {
+        host.text = values['host'] as String? ?? '';
+        port.text = values['port'] as String? ?? '2101';
+        mount.text = values['mount'] as String? ?? '';
+        user.text = values['user'] as String? ?? '';
+        tls = values['tls'] == true;
+        version = values['version'] as int? ?? 2;
+        bluetoothAddress = values['bluetoothAddress'] as String?;
+        bluetoothName = values['bluetoothName'] as String?;
+        keepStreaming = values['keepStreaming'] == true;
+        configurationName =
+            values['configurationName'] as String? ?? 'ntripscope.ini';
+      });
+    } catch (_) {
+      /* No saved non-secret settings yet. */
+    }
+  }
+
+  Future<void> saveLocalSettings() async {
+    try {
+      final file = await localSettingsFile();
+      await file.parent.create(recursive: true);
+      await file.writeAsString(
+        jsonEncode({
+          'host': host.text,
+          'port': port.text,
+          'mount': mount.text,
+          'user': user.text,
+          'tls': tls,
+          'version': version,
+          'bluetoothAddress': bluetoothAddress,
+          'bluetoothName': bluetoothName,
+          'keepStreaming': keepStreaming,
+          'configurationName': configurationName,
         }),
       );
+    } catch (_) {
+      /* Configuration export remains available. */
+    }
+  }
+
+  Future<void> releaseNativeReceiver() async {
+    try {
+      await StreamOutputs.channel
+          .invokeMethod<void>(Platform.isIOS ? 'closeBle' : 'closeBluetooth')
+          .timeout(const Duration(seconds: 10));
+    } catch (error) {
+      if (mounted) outputStatus(errorText(error));
+    }
+    receiverLinked = false;
+  }
+
+  Future<void> disconnectReceiver() async {
+    await releaseNativeReceiver();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> stopSession({bool releaseReceiver = false}) async {
+    final active = session;
+    active?.stop(releaseReceiver: releaseReceiver);
+    mapModel.stop();
+    if (!_disposing) mapRevision.value = mapModel.snapshot;
+    redraw?.cancel();
+    redraw = null;
+    receiverRedraw?.cancel();
+    receiverRedraw = null;
+    final outputs = activeOutputs;
+    final lease = _backgroundLease;
+    final done = _sessionDone;
+    _shutdowns++;
+    if (mounted && !_disposing) setState(() => status = 'Disconnecting…');
+    try {
+      await Future.wait<void>([
+        if (outputs != null)
+          outputs.close(keepBluetooth: Platform.isAndroid && !releaseReceiver),
+        if (lease != null) lease.stop(),
+        if (releaseReceiver && bluetoothAddress != null)
+          releaseNativeReceiver(),
+        if (done != null) done.future,
+      ]);
+    } catch (error) {
+      if (mounted && !_disposing) outputStatus(errorText(error));
+    } finally {
+      _shutdowns--;
+      if (mounted && !_disposing)
+        setState(() {
+          if (session == null)
+            status = _hidden
+                ? 'Session closed · app in background'
+                : 'Disconnected';
+        });
+    }
+  }
+
+  Future<void> toggleBackground(bool enabled) async {
+    if (busy) return;
+    if (!enabled) {
+      setState(() => keepStreaming = false);
+      unawaited(saveLocalSettings());
+      return;
+    }
+    setState(() => readingSettings = true);
+    try {
+      final permissions = await BackgroundStreaming.prepare();
+      if (!mounted) return;
+      setState(() {
+        keepStreaming = true;
+        outputNotice = permissions['batteryExempt'] == false
+            ? 'For long screen-off sessions, allow unrestricted battery use in Battery settings.'
+            : null;
+      });
+      unawaited(saveLocalSettings());
+    } catch (error) {
+      if (mounted) outputStatus(errorText(error));
+    } finally {
+      if (mounted) setState(() => readingSettings = false);
+    }
   }
 
   Future<void> chooseOutputFile() async {
@@ -272,7 +521,9 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     setState(() => readingSettings = true);
     try {
       final devices =
-          await StreamOutputs.channel.invokeListMethod<Map>('pairedDevices') ??
+          await StreamOutputs.channel.invokeListMethod<Map>(
+            Platform.isIOS ? 'scanBle' : 'pairedDevices',
+          ) ??
           [];
       if (!mounted) return;
       if (devices.isEmpty) {
@@ -284,7 +535,9 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       final selected = await showDialog<Map>(
         context: context,
         builder: (context) => SimpleDialog(
-          title: const Text('Paired Bluetooth devices'),
+          title: Text(
+            Platform.isIOS ? 'Nearby BLE devices' : 'Paired Bluetooth devices',
+          ),
           children: [
             for (final device in devices)
               SimpleDialogOption(
@@ -299,6 +552,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           bluetoothAddress = selected['address'] as String;
           bluetoothName = selected['name'] as String;
         });
+      unawaited(saveLocalSettings());
     } catch (error) {
       outputStatus(errorText(error));
     } finally {
@@ -307,12 +561,26 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   }
 
   Future<void> run({required bool list}) async {
-    if (busy) return;
+    if (busy || _hidden) return;
     FocusScope.of(context).unfocus();
     Caster config;
     int? listenPort;
     try {
       config = currentConfig(list: list);
+      if (!list && Platform.isIOS && bluetoothAddress != null) {
+        final uuid = RegExp(
+          r'^(?:[0-9a-fA-F]{4}|[0-9a-fA-F]{8}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$',
+        );
+        if ([
+          bleService,
+          bleWrite,
+          bleRead,
+        ].any((field) => !uuid.hasMatch(field.text.trim()))) {
+          throw const FormatException(
+            'Enter valid BLE service and characteristic UUIDs',
+          );
+        }
+      }
       if (!list && forwardTcp) {
         listenPort = int.tryParse(tcpPort.text.trim());
         if (listenPort == null || listenPort < 1 || listenPort > 65535) {
@@ -326,20 +594,60 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       showStatus(error.message);
       return;
     }
-    final active = NtripSession();
+    late final NtripSession active;
+    active = NtripSession(
+      onGgaSource: (source) {
+        if (mounted &&
+            session == active &&
+            !active.stopped &&
+            source != ggaNotice)
+          setState(() => ggaNotice = source);
+      },
+    );
+    final finished = Completer<void>();
+    _sessionDone = finished;
     setState(() {
       session = active;
       status = list ? 'Fetching mountpoints…' : 'Connecting…';
       outputNotice = null;
+      receiverError = null;
+      ggaNotice = null;
       if (!list) {
+        final streamKey =
+            '${config.host.toLowerCase()}|${config.port}|${config.tls}|${config.mount}';
+        final manual = config.rover;
+        mapModel.begin(
+          streamKey,
+          manual == null
+              ? null
+              : GeoPosition(manual.latitude, manual.longitude, manual.height),
+        );
+        mapRevision.value = mapModel.snapshot;
+        decoderRevision = 0;
+        lastCasterAt = null;
         decoder = RtcmDecoder();
+        skyRevision.value = const SkySnapshot();
         preview.clear();
+        receiverPreviews.clear();
+        receiverCounts.clear();
+        fixModel.reset();
+        fixRevision.value++;
         count = 0;
       }
     });
+    unawaited(saveLocalSettings());
     File? pending;
     RandomAccessFile? output;
+    StreamOutputs? destinations;
+    final lease = !list && _androidBackground && keepStreaming
+        ? BackgroundStreaming()
+        : null;
+    _backgroundLease = lease;
     try {
+      if (lease != null) {
+        await lease.start(config.mount);
+        if (active.stopped) return;
+      }
       if (list) {
         final result = await active.mountpoints(config);
         if (mounted && !active.stopped) {
@@ -349,15 +657,59 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           });
         }
       } else {
-        final destinations = StreamOutputs(outputStatus);
+        destinations = StreamOutputs(
+          (message) {
+            if (!mounted || session != active || active.stopped) return;
+            if (message.startsWith('Bluetooth')) {
+              receiverError = message;
+              receiverLinked = false;
+              active.stop();
+              mapModel.stop();
+              mapRevision.value = mapModel.snapshot;
+            }
+            outputStatus(message);
+          },
+          onMonitorData: (source, bytes) {
+            if (!mounted || session != active || active.stopped) return;
+            if (fixModel.add(source, bytes)) fixRevision.value++;
+            final buffer = receiverPreviews.putIfAbsent(source, () => <int>[]);
+            buffer.addAll(
+              bytes.length > 8192 ? bytes.sublist(bytes.length - 8192) : bytes,
+            );
+            if (buffer.length > 8192)
+              buffer.removeRange(0, buffer.length - 8192);
+            receiverCounts[source] =
+                (receiverCounts[source] ?? 0) + bytes.length;
+            mapModel.accept(source, bytes);
+            mapRevision.value = mapModel.snapshot;
+            receiverRedraw ??= Timer(const Duration(milliseconds: 150), () {
+              receiverRedraw = null;
+              if (mounted && !active.stopped) trafficRevision.value++;
+            });
+          },
+          onReceiverData: active.receiveExternal,
+          onReceiverDisconnected: () {
+            if (!mounted || session != active || active.stopped) return;
+            receiverLinked = false;
+            active.externalDisconnected();
+          },
+        );
         activeOutputs = destinations;
         await destinations.open(
           file: fileUri,
           port: listenPort,
           network: allowNetwork,
           bluetooth: bluetoothAddress,
+          bleProfile: Platform.isIOS
+              ? {
+                  'service': bleService.text.trim(),
+                  'write': bleWrite.text.trim(),
+                  'read': bleRead.text.trim(),
+                }
+              : null,
         );
         if (active.stopped) return;
+        receiverLinked = bluetoothAddress != null;
         if (listenPort != null) {
           outputStatus(
             'TCP listening on ${allowNetwork ? 'the local network' : '127.0.0.1'}:${destinations.tcpPort}',
@@ -371,10 +723,11 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           output = await pending.open(mode: FileMode.write);
         }
         await for (final bytes in active.stream(config)) {
-          if (!mounted) break;
+          if (!mounted || active.stopped) break;
           await destinations.write(bytes);
           if (output != null) await output.writeFrom(bytes);
-          if (!mounted) break;
+          if (!mounted || active.stopped) break;
+          lastCasterAt = DateTime.now();
           count += bytes.length;
           preview.addAll(
             bytes.length > 256 ? bytes.sublist(bytes.length - 256) : bytes,
@@ -382,9 +735,21 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           if (preview.length > 256)
             preview.removeRange(0, preview.length - 256);
           decoder.add(bytes);
+          mapModel.remember(decoder.station);
+          mapRevision.value = mapModel.snapshot;
           redraw ??= Timer(const Duration(milliseconds: 150), () {
             redraw = null;
-            if (mounted) rtcmRevision.value++;
+            if (!mounted || active.stopped) return;
+            trafficRevision.value++;
+            final revision = decoder.counts.values.fold(
+              decoder.invalidCrc,
+              (sum, value) => sum + value,
+            );
+            if (revision != decoderRevision) {
+              decoderRevision = revision;
+              rtcmRevision.value++;
+              skyRevision.value = decoder.sky;
+            }
             showStatus('Receiving data');
           });
         }
@@ -397,16 +762,33 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     } catch (error) {
       if (!active.stopped) showStatus(errorText(error));
     } finally {
-      if (active.stopped) showStatus('Disconnected');
+      final wasStopped = active.stopped;
+      final finalStatus = status;
       active.stop();
-      redraw?.cancel();
-      redraw = null;
-      final destinations = activeOutputs;
-      activeOutputs = null;
+      if (mounted && !_disposing && session == active) {
+        mapModel.stop();
+        mapRevision.value = mapModel.snapshot;
+        receiverRedraw?.cancel();
+        receiverRedraw = null;
+        redraw?.cancel();
+        redraw = null;
+        if (!list) showStatus(receiverError ?? 'Disconnecting…');
+      }
       try {
-        await destinations?.close();
+        await Future.wait<void>([
+          if (destinations != null)
+            destinations.close(
+              keepBluetooth:
+                  Platform.isAndroid &&
+                  !active.releaseReceiverOnStop &&
+                  !_hidden &&
+                  receiverError == null,
+            ),
+          if (lease != null) lease.stop(),
+        ]);
       } catch (error) {
-        outputStatus(errorText(error));
+        if (mounted && !_disposing && session == active)
+          outputStatus(errorText(error));
       }
       try {
         await output?.close();
@@ -416,11 +798,29 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           await pending?.delete();
         }
       } catch (error) {
-        showStatus(errorText(error));
-      }
-      if (mounted) {
-        if (!list) rtcmRevision.value++;
-        setState(() => session = null);
+        if (mounted && !_disposing && session == active)
+          outputStatus(errorText(error));
+      } finally {
+        if (identical(activeOutputs, destinations)) activeOutputs = null;
+        if (identical(_backgroundLease, lease)) _backgroundLease = null;
+        if (identical(_sessionDone, finished)) _sessionDone = null;
+        if (session == active) {
+          if (mounted && !_disposing) {
+            if (!list) rtcmRevision.value++;
+            setState(() {
+              session = null;
+              status = wasStopped || active.releaseReceiverOnStop
+                  ? receiverError ??
+                        (_hidden
+                            ? 'Session closed · app in background'
+                            : 'Disconnected')
+                  : finalStatus;
+            });
+          } else {
+            session = null;
+          }
+        }
+        if (!finished.isCompleted) finished.complete();
       }
     }
   }
@@ -449,17 +849,26 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     bool secret = false,
     bool numeric = false,
     VoidCallback? onChanged,
-  }) => TextField(
-    controller: controller,
-    enabled: !busy,
-    autocorrect: false,
-    enableSuggestions: !secret,
-    obscureText: secret,
-    keyboardType: numeric
-        ? const TextInputType.numberWithOptions(decimal: true, signed: true)
-        : TextInputType.text,
-    decoration: InputDecoration(labelText: label),
-    onChanged: onChanged == null ? null : (_) => onChanged(),
+  }) => Focus(
+    onFocusChange: (focused) {
+      if (!focused && (controller == height || controller == geoid)) {
+        final value = double.tryParse(controller.text.replaceAll(',', '.'));
+        if (value != null && value.isFinite)
+          controller.text = value.toStringAsFixed(3);
+      }
+    },
+    child: TextField(
+      controller: controller,
+      enabled: !busy,
+      autocorrect: false,
+      enableSuggestions: !secret,
+      obscureText: secret,
+      keyboardType: numeric
+          ? const TextInputType.numberWithOptions(decimal: true, signed: true)
+          : TextInputType.text,
+      decoration: InputDecoration(labelText: label),
+      onChanged: onChanged == null ? null : (_) => onChanged(),
+    ),
   );
 
   void clearMountpoints() {
@@ -516,13 +925,42 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.asset('assets/orbit.png', width: 32, height: 32),
+              child: Image.asset('assets/orbit.png', width: 40, height: 40),
             ),
-            const SizedBox(width: 12),
-            const Text('NTRIP Scope'),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text('NTRIP Scope', style: TextStyle(fontSize: 16)),
+                      const SizedBox(width: 4),
+                      if (appVersion.isNotEmpty)
+                        Text(
+                          'v$appVersion',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const Text(
+                    'NTRIP client · RTCM decoder',
+                    style: TextStyle(fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Map & sky',
+            onPressed: showMap,
+            icon: const Icon(Icons.map_outlined),
+          ),
           IconButton(
             tooltip: 'About NTRIP Scope',
             onPressed: showProjectInfo,
@@ -547,7 +985,8 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
               ),
               title: Text(status),
               subtitle: Text(
-                '$count bytes · ${decoder.invalidCrc} invalid CRC',
+                '$count bytes · ${decoder.invalidCrc} invalid CRC'
+                '${ggaNotice == null ? '' : '\n$ggaNotice'}',
               ),
               trailing: session == null
                   ? null
@@ -561,29 +1000,31 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
                       child: const Text('Stop'),
                     ),
             ),
-            if (session != null) const LinearProgressIndicator(),
+            ValueListenableBuilder<int>(
+              valueListenable: fixRevision,
+              builder: (context, _, child) => ReceiverFixBadge(
+                status: fixModel.status,
+                active: session != null && !session!.stopped,
+                manual: sendRover,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TrafficBar(
+                active: session != null && !session!.stopped,
+                lastData: lastCasterAt,
+              ),
+            ),
             Expanded(
               child: TabBarView(
                 children: [
                   connection(context),
-                  ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      const Text('Latest bytes · HEX and ASCII'),
-                      const SizedBox(height: 10),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: SelectableText(
-                          preview.isEmpty
-                              ? 'Waiting for data'
-                              : hexAscii(preview),
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
+                  LiveStreamsPanel(
+                    caster: preview,
+                    count: count,
+                    receivers: receiverPreviews,
+                    receiverCounts: receiverCounts,
+                    updates: trafficRevision,
                   ),
                   frameList(context),
                 ],
@@ -674,18 +1115,21 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
-        title: const Text('Send rover GGA'),
+        title: const Text('Manual Rover position · send GGA'),
+        subtitle: const Text(
+          'When enabled, the GGA generated from these coordinates overrides GGA received from Bluetooth, serial or TCP sources.',
+        ),
         value: sendRover,
-        onChanged: busy ? null : (value) => setState(() => sendRover = value),
+        onChanged: busy
+            ? null
+            : (value) {
+                setState(() => sendRover = value);
+                refreshManualMap();
+              },
       ),
       if (sendRover) ...[
-        Row(
-          children: [
-            Expanded(child: field(latitude, 'Latitude (°)', numeric: true)),
-            const SizedBox(width: 12),
-            Expanded(child: field(longitude, 'Longitude (°)', numeric: true)),
-          ],
-        ),
+        RoverAngleEditor(decimal: latitude, latitude: true, enabled: !busy),
+        RoverAngleEditor(decimal: longitude, latitude: false, enabled: !busy),
         Row(
           children: [
             Expanded(
@@ -703,12 +1147,48 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           label: const Text('Use phone latitude and longitude'),
         ),
       ],
+      if (receiverLinked && !busy)
+        TextButton.icon(
+          onPressed: disconnectReceiver,
+          icon: const Icon(Icons.bluetooth_disabled),
+          label: const Text('Disconnect receiver'),
+        ),
+      if (receiverError != null)
+        Text(
+          receiverError!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
       if (Platform.isAndroid) androidOutputs(),
+      if (Platform.isIOS) bleOutputs(),
       if (outputNotice != null)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Text(outputNotice!),
         ),
+      if (_androidBackground) ...[
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Keep streaming with screen off'),
+          subtitle: const Text(
+            'Keeps NTRIP and receiver streams active in standby. Uses more battery.',
+          ),
+          value: keepStreaming,
+          onChanged: busy ? null : (value) => toggleBackground(value!),
+        ),
+        if (keepStreaming)
+          TextButton(
+            onPressed: busy
+                ? null
+                : () async {
+                    try {
+                      await BackgroundStreaming.batterySettings();
+                    } catch (error) {
+                      outputStatus(errorText(error));
+                    }
+                  },
+            child: const Text('Battery settings'),
+          ),
+      ],
       CheckboxListTile(
         contentPadding: EdgeInsets.zero,
         title: const Text('Record RTCM'),
@@ -790,6 +1270,41 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
                 tooltip: 'Disable Bluetooth output',
                 onPressed: busy
                     ? null
+                    : () async {
+                        await disconnectReceiver();
+                        if (mounted)
+                          setState(() {
+                            bluetoothAddress = null;
+                            bluetoothName = null;
+                          });
+                        unawaited(saveLocalSettings());
+                      },
+                icon: const Icon(Icons.clear),
+              ),
+      ),
+    ],
+  );
+
+  Widget bleOutputs() => ExpansionTile(
+    tilePadding: EdgeInsets.zero,
+    title: const Text('Bluetooth LE receiver'),
+    children: [
+      const Text(
+        'Select the UART service defined by your receiver manufacturer. Defaults use Nordic UART Service.',
+      ),
+      field(bleService, 'BLE service UUID'),
+      field(bleWrite, 'Write RTCM characteristic UUID'),
+      field(bleRead, 'Receive GGA characteristic UUID'),
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Scan for BLE receivers'),
+        subtitle: Text(bluetoothName ?? 'No receiver selected'),
+        onTap: busy ? null : chooseBluetooth,
+        trailing: bluetoothAddress == null
+            ? null
+            : IconButton(
+                onPressed: busy
+                    ? null
                     : () => setState(() {
                         bluetoothAddress = null;
                         bluetoothName = null;
@@ -804,22 +1319,28 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     final types = decoder.counts.keys.toList()..sort();
     if (types.isEmpty)
       return const Center(child: Text('No valid RTCM3 frames received'));
-    return ListView.builder(
-      itemCount: types.length,
-      itemBuilder: (context, index) {
-        final type = types[index];
-        final frames = decoder.frames[type]!;
-        return ListTile(
-          title: Text('$type · ${frames.first.name}'),
-          subtitle: Text('${decoder.counts[type]} frames'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => FrameView(frames: frames, updates: rtcmRevision),
+    return Scrollbar(
+      controller: frameListScroll,
+      thumbVisibility: true,
+      child: ListView.builder(
+        controller: frameListScroll,
+        itemCount: types.length,
+        itemBuilder: (context, index) {
+          final type = types[index];
+          final frames = decoder.frames[type]!;
+          return ListTile(
+            title: Text('$type · ${frames.first.name}'),
+            subtitle: Text('${decoder.counts[type]} frames'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    FrameView(frames: frames, updates: rtcmRevision),
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }
@@ -834,8 +1355,18 @@ class FrameView extends StatefulWidget {
 
 class _FrameViewState extends State<FrameView> {
   static const latest = 'latest';
+  final scroll = ScrollController();
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
+  }
+
   RtcmFrame? selectedFrame;
   int? slot;
+  bool chart = false, paused = false;
+  bool showFields = false;
+  RtcmFrame? pausedFrame;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -844,7 +1375,8 @@ class _FrameViewState extends State<FrameView> {
   );
 
   Widget frameDetails() {
-    final frame = selectedFrame ?? widget.frames.first;
+    final frame =
+        selectedFrame ?? (paused ? pausedFrame : null) ?? widget.frames.first;
     final history = widget.frames.skip(1).toList();
     if (selectedFrame != null && !history.contains(selectedFrame)) {
       history.add(selectedFrame!);
@@ -870,98 +1402,149 @@ class _FrameViewState extends State<FrameView> {
     return Scaffold(
       appBar: AppBar(title: Text('${frame.type} · ${frame.name}')),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            DropdownButton<Object>(
-              isExpanded: true,
-              value: selectedFrame ?? latest,
-              items: [
-                DropdownMenuItem(
-                  value: latest,
-                  child: Text('Latest frame · ${time(widget.frames.first)}'),
-                ),
-                for (final previous in history)
-                  DropdownMenuItem(
-                    value: previous,
-                    child: Text('Frame · ${time(previous)}'),
-                  ),
-              ],
-              onChanged: (value) => setState(() {
-                selectedFrame = value is RtcmFrame ? value : null;
-                slot = null;
-              }),
-            ),
-            for (final entry in fields.entries)
-              Text('${entry.key} · ${entry.value}'),
-            if (warning != null) Text(warning),
-            if (slots.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              DropdownButton<int>(
-                value: slot,
-                hint: const Text('All satellite slots'),
+        child: Scrollbar(
+          controller: scroll,
+          thumbVisibility: true,
+          child: ListView(
+            controller: scroll,
+            padding: const EdgeInsets.all(16),
+            children: [
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Pause decoder updates'),
+                subtitle: const Text('Reception and recording continue'),
+                value: paused,
+                onChanged: (value) => setState(() {
+                  paused = value!;
+                  pausedFrame = paused ? frame : null;
+                }),
+              ),
+              DropdownButton<Object>(
+                isExpanded: true,
+                value: selectedFrame ?? latest,
                 items: [
-                  const DropdownMenuItem<int>(
-                    value: null,
-                    child: Text('All satellite slots'),
+                  DropdownMenuItem(
+                    value: latest,
+                    child: Text('Latest frame · ${time(widget.frames.first)}'),
                   ),
-                  for (final satellite in slots)
+                  for (final previous in history)
                     DropdownMenuItem(
-                      value: satellite,
-                      child: Text('Slot $satellite'),
+                      value: previous,
+                      child: Text('Frame · ${time(previous)}'),
                     ),
                 ],
-                onChanged: (value) => setState(() => slot = value),
+                onChanged: (value) => setState(() {
+                  selectedFrame = value is RtcmFrame ? value : null;
+                  paused = false;
+                  pausedFrame = null;
+                  slot = null;
+                }),
               ),
-              if (slot != null && observations.every((row) => row.slot != slot))
-                const Text('Selected satellite is absent from this frame.'),
-              if (frame.type % 10 <= 3)
-                const Text('Ranges are modulo 1 ms for MSM1–3.'),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  columns: [
-                    for (final label in [
-                      'Slot',
-                      'Signal',
-                      'Code (m)',
-                      'Phase (m)',
-                      'C/N₀ (dB-Hz)',
-                      'Rate (m/s)',
-                    ])
-                      DataColumn(label: Text(label)),
-                  ],
-                  rows: [
-                    for (final row in observations.where(
-                      (row) => slot == null || row.slot == slot,
-                    ))
-                      DataRow(
-                        cells: [
-                          for (final value in [
-                            '${row.slot}',
-                            row.signal,
-                            measurement(row.code),
-                            measurement(row.phase),
-                            measurement(row.cnr),
-                            measurement(row.rate),
-                          ])
-                            DataCell(Text(value)),
-                        ],
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('Fields')),
+                  ButtonSegment(value: false, label: Text('Measurements')),
+                ],
+                selected: {showFields},
+                onSelectionChanged: (v) => setState(() => showFields = v.first),
+              ),
+              if (showFields || observations.isEmpty) ...[
+                Text(
+                  'RTCM ${frame.type} · ${frame.payload.length} payload bytes',
+                ),
+                for (final entry in fields.entries)
+                  SelectableText('${entry.key} · ${entry.value}'),
+                if (fields.isEmpty)
+                  const Text(
+                    'Fields are not decoded for this message type. Raw payload is available below.',
+                  ),
+              ],
+              if (warning != null) Text(warning),
+              if (!showFields && slots.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                DropdownButton<int>(
+                  value: slot,
+                  hint: const Text('All satellite slots'),
+                  items: [
+                    const DropdownMenuItem<int>(
+                      value: null,
+                      child: Text('All satellite slots'),
+                    ),
+                    for (final satellite in slots)
+                      DropdownMenuItem(
+                        value: satellite,
+                        child: Text('Slot $satellite'),
                       ),
                   ],
+                  onChanged: (value) => setState(() => slot = value),
+                ),
+                if (slot != null &&
+                    observations.every((row) => row.slot != slot))
+                  const Text('Selected satellite is absent from this frame.'),
+                if (frame.type % 10 <= 3)
+                  const Text('Ranges are modulo 1 ms for MSM1–3.'),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Table')),
+                    ButtonSegment(value: true, label: Text('C/N₀ chart')),
+                  ],
+                  selected: {chart},
+                  onSelectionChanged: (value) =>
+                      setState(() => chart = value.first),
+                ),
+                if (chart)
+                  CnrChart(
+                    rows: observations
+                        .where((row) => slot == null || row.slot == slot)
+                        .toList(),
+                  )
+                else
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      columns: [
+                        for (final label in [
+                          'Slot',
+                          'Signal',
+                          'Code (m)',
+                          'Phase (m)',
+                          'C/N₀ (dB-Hz)',
+                          'Rate (m/s)',
+                        ])
+                          DataColumn(label: Text(label)),
+                      ],
+                      rows: [
+                        for (final row in observations.where(
+                          (row) => slot == null || row.slot == slot,
+                        ))
+                          DataRow(
+                            cells: [
+                              for (final value in [
+                                '${row.slot}',
+                                row.signal,
+                                measurement(row.code),
+                                measurement(row.phase),
+                                measurement(row.cnr),
+                                measurement(row.rate),
+                              ])
+                                DataCell(Text(value)),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 12),
+              const Text('Payload · HEX and ASCII'),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SelectableText(
+                  hexAscii(frame.payload),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                 ),
               ),
             ],
-            const SizedBox(height: 12),
-            const Text('Payload · HEX and ASCII'),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SelectableText(
-                hexAscii(frame.payload),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

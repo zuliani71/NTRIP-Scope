@@ -10,9 +10,13 @@ def main():
     source = Path(__file__).resolve().parent
     root = source.parents[1]
     if sys.argv[1:] == ["--cli"]:
+        native = []
+        if sys.platform == "darwin":
+            subprocess.run(["/bin/sh", str(source / "native/build.sh")], check=True)
+            native = ["--add-binary", str(source / "native/ntripscope-bluetooth") + ":native"]
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
                         "--name", "ntripscope", "--collect-submodules", "serial",
-                        str(source / "ntripscope.py")], cwd=root, check=True)
+                        *native, str(source / "ntripscope.py")], cwd=root, check=True)
         return
     with tempfile.TemporaryDirectory() as folder:
         options = []

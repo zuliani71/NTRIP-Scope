@@ -5,3 +5,11 @@ __pycache__/
 build/
 dist/
 *.spec
+
+# Local operational notes and signing material
+HANDOFF.md
+AGENTS.md
+CLAUDE.md
+**/.local-signing/
+*.keystore
+*.jks

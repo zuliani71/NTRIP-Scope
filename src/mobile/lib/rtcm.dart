@@ -1,10 +1,17 @@
 import 'dart:math';
+import 'geo.dart';
+import 'sky.dart';
 
 class RtcmDecoder {
   final _buffer = <int>[];
   final counts = <int, int>{};
   final frames = <int, List<RtcmFrame>>{};
   int invalidCrc = 0;
+  GeoPosition? station;
+  final gpsOrbits = <int, GpsEphemeris>{};
+  GpsEpoch? gpsEpoch;
+  SkySnapshot get sky =>
+      SkySnapshot(orbits: List.unmodifiable(gpsOrbits.values), epoch: gpsEpoch);
 
   void add(List<int> bytes) {
     _buffer.addAll(bytes);
@@ -33,6 +40,23 @@ class RtcmDecoder {
       }
       if (size >= 2) {
         final frame = RtcmFrame(_buffer.sublist(start + 3, end));
+        try {
+          station = frame.stationPosition() ?? station;
+          if (frame.type == 1019) {
+            final orbit = GpsEphemeris.decode(frame.payload);
+            if (orbit != null) {
+              gpsOrbits[orbit.prn] = orbit;
+            }
+          }
+          if (frame.isMsm && frame.type ~/ 10 == 107) {
+            final bits = _Bits(frame.payload)..skip(24);
+            final ms = bits.read(30);
+            if (ms < 604800000)
+              gpsEpoch = GpsEpoch.received(ms / 1000, frame.timestamp);
+          }
+        } on FormatException {
+          /* Keep last valid position. */
+        }
         counts.update(frame.type, (value) => value + 1, ifAbsent: () => 1);
         final recent = frames.putIfAbsent(frame.type, () => []);
         recent.insert(0, frame);
@@ -91,6 +115,16 @@ class RtcmFrame {
   String get name => isMsm
       ? '${systems[type ~/ 10]} MSM${type % 10}'
       : names[type] ?? 'RTCM3 message';
+
+  GeoPosition? stationPosition() {
+    if (type != 1005 && type != 1006) return null;
+    final bits = _Bits(payload)..skip(34);
+    final x = bits.signed(38) / 10000;
+    bits.skip(2);
+    final y = bits.signed(38) / 10000;
+    bits.skip(2);
+    return GeoPosition.fromEcef(x, y, bits.signed(38) / 10000);
+  }
 
   Map<String, String> details() {
     final bits = _Bits(payload)..read(12);

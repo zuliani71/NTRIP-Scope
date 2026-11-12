@@ -1,12 +1,84 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ntripscope_mobile/config.dart';
+import 'package:ntripscope_mobile/gga.dart';
 import 'package:ntripscope_mobile/ntrip.dart';
 import 'package:ntripscope_mobile/rtcm.dart';
 
 void main() {
+  test(
+    'fragmented NMEA input accepts valid fixes and rejects corrupt data',
+    () {
+      final sentence = Rover(46.125, 13.333333, 100, 0).gga();
+      final input = GgaReader();
+      expect(input.add(List.filled(4096, 255)), isEmpty);
+      expect(input.add(ascii.encode(sentence.substring(0, 24))), isEmpty);
+      expect(input.add(ascii.encode('${sentence.substring(24)}\r\n')), [
+        sentence,
+      ]);
+      expect(
+        validGga('${sentence.substring(0, sentence.length - 2)}ZZ'),
+        isFalse,
+      );
+    },
+  );
+
+  for (final manual in [false, true]) {
+    test('reverse GGA flow with manual priority $manual', () async {
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      final upstream = Completer<String>();
+      final rover = Rover(46.125, 13.333333, 100, 0);
+      final external = Rover(45.5, 12.5, 21, 0).gga();
+      final session = NtripSession();
+      addTearDown(session.stop);
+      final worker = server.listen((socket) {
+        var headers = false;
+        var pending = '';
+        socket.listen((bytes) {
+          pending += ascii.decode(bytes);
+          if (!headers) {
+            final end = pending.indexOf('\r\n\r\n');
+            if (end < 0) return;
+            pending = pending.substring(end + 4);
+            headers = true;
+            socket.write('ICY 200 OK\r\n');
+            session.receiveExternal(ascii.encode(external.substring(0, 23)));
+            session.receiveExternal(
+              ascii.encode('${external.substring(23)}\r\n'),
+            );
+          }
+          if (pending.contains('\r\n') && !upstream.isCompleted) {
+            upstream.complete(pending.split('\r\n').first);
+            socket.add([0xd3, 0, 0xff, 0]);
+            socket.close();
+          }
+        });
+      });
+      addTearDown(worker.cancel);
+      final bytes = await session
+          .stream(
+            Caster(
+              host: '127.0.0.1',
+              port: server.port,
+              mount: 'VRS',
+              version: 1,
+              rover: manual ? rover : null,
+            ),
+          )
+          .expand((data) => data)
+          .toList()
+          .timeout(const Duration(seconds: 5));
+      final sent = await upstream.future;
+      expect(bytes, [0xd3, 0, 0xff, 0]);
+      expect(sent, manual ? startsWith(r'$GPGGA,') : external);
+      if (manual) expect(sent, contains(',4607.500000,N,01319.999980,E,'));
+    });
+  }
+
   test('shared CLI INI and GGA with signed coordinates and geoid', () {
     final ini = File('assets/ntripscope-vrs.example.ini').readAsStringSync();
     final config = Caster.fromIni(ini);

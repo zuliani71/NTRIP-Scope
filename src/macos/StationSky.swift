@@ -105,6 +105,9 @@ struct MountpointMap: View {
     let position: StationPosition?
     let fromRTCM: Bool
     let rover: StationPosition?
+    var stationIsLastKnown = false
+    var roverSource = ""
+    var roverHeightAvailable = true
     let ephemerides: [GPSEphemeris]
     let epoch: RTCMDecoder.GPSEpoch?
     @State private var sky = false
@@ -119,7 +122,7 @@ struct MountpointMap: View {
                 Text(tr("Cielo GPS")).tag(true)
             }.pickerStyle(.segmented).labelsHidden()
             if let position {
-                Text(fromRTCM ? tr("Antenna dal flusso RTCM 1005/1006") : tr("Posizione indicativa dalla sourcetable"))
+                Text(fromRTCM ? tr(stationIsLastKnown ? "Ultima posizione antenna da RTCM 1005/1006" : "Antenna dal flusso RTCM 1005/1006") : tr("Posizione indicativa dalla sourcetable"))
                     .font(.caption).foregroundStyle(.secondary)
                 if sky {
                     if let epoch, !ephemerides.isEmpty {
@@ -138,8 +141,26 @@ struct MountpointMap: View {
                         } else {
                             StationMap(position: position, name: name, rover: rover)
                         }
-                    }.id(position.coordinateKey)
-                    coordinateDetails(position)
+                    }.id(name).frame(minHeight: 180)
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(tr("Mountpoint")).font(.caption.bold())
+                                coordinateDetails(position, heightAvailable: fromRTCM)
+                            }
+                            if let rover {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    HStack {
+                                        Text("Rover").font(.caption.bold())
+                                        Text(tr(roverSource)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    coordinateDetails(rover, heightAvailable: roverHeightAvailable)
+                                }
+                                Text("\(tr("Distanza dal mountpoint")): \(decimal(roverDistance(position, rover), digits: 3)) km")
+                                    .font(.caption.monospacedDigit())
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(minHeight: 100, maxHeight: 240)
                 }
             } else {
                 placeholder(tr("Scarica l’elenco e scegli un mountpoint, oppure connettiti a un flusso con RTCM 1005/1006."))
@@ -147,7 +168,7 @@ struct MountpointMap: View {
         }
     }
 
-    private func coordinateDetails(_ position: StationPosition) -> some View {
+    private func coordinateDetails(_ position: StationPosition, heightAvailable: Bool) -> some View {
         Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
             GridRow {
                 Color.clear.frame(width: 1, height: 1)
@@ -166,13 +187,13 @@ struct MountpointMap: View {
             }
             GridRow {
                 Text(tr("Quota ellissoidica"))
-                Text(fromRTCM ? decimal(position.height, digits: 3) + " m" : tr("Non disponibile"))
+                Text(heightAvailable ? decimal(position.height, digits: 3) + " m" : tr("Non disponibile"))
                     .gridCellColumns(2)
             }
         }
         .font(.caption.monospacedDigit())
         .textSelection(.enabled)
-        .padding(.vertical, 3)
+        .padding(.vertical, 1)
     }
 
     private func decimal(_ value: Double, digits: Int) -> String {
@@ -352,6 +373,9 @@ private struct OfflineStationMap: View {
                         .help(tr("Ingrandisci"))
                     Button { scale = max(2, scale/2) } label: { Image(systemName: "minus") }
                         .help(tr("Riduci"))
+                    Button(tr("Mostra entrambi")) { fitRover(proxy.size) }
+                        .font(.caption).disabled(rover == nil)
+                        .help(tr("Inquadra mountpoint e rover"))
                 }.controlSize(.large).padding(8)
             }
             .overlay(alignment: .bottomTrailing) {
@@ -364,7 +388,6 @@ private struct OfflineStationMap: View {
                     .allowsHitTesting(false)
             }
             .onAppear { fitRover(proxy.size) }
-            .onChange(of: rover) { _ in fitRover(proxy.size) }
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
@@ -415,13 +438,15 @@ private struct StationMap: View {
             }
         }
         .onAppear { fitRover() }
-        .onChange(of: rover) { _ in fitRover() }
         .overlay(alignment: .topTrailing) {
             VStack(spacing: 4) {
                 Button { zoom(by: 0.5) } label: { Image(systemName: "plus") }
                     .help(tr("Ingrandisci")).accessibilityLabel(tr("Ingrandisci"))
                 Button { zoom(by: 2) } label: { Image(systemName: "minus") }
                     .help(tr("Riduci")).accessibilityLabel(tr("Riduci"))
+                Button(tr("Mostra entrambi")) { fitRover() }
+                    .font(.caption).disabled(rover == nil)
+                    .help(tr("Inquadra mountpoint e rover"))
             }
             .controlSize(.large)
             .padding(8)
