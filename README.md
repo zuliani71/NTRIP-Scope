@@ -2,7 +2,7 @@
 
 <img src="assets/orbit.png" alt="NTRIP Scope satellite application icon" width="128">
 
-NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. A mobile diagnostic client is available for Android. The iPhone/iPad 0.5.0 development preview includes the shared diagnostics and iOS file/TCP/BLE outputs; build it with your own Xcode signing team. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
+NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a command-line client, `ntripscope`, for macOS, Windows and Linux. The desktop interface is available in English and Italian. A mobile diagnostic client is available for Android. The iPhone/iPad 0.5.1 development preview includes the shared diagnostics and iOS file/TCP/BLE outputs; build it with your own Xcode signing team. The command-line client can list mountpoints and stream raw RTCM to standard output for scripting, or forward it to files, TCP and serial ports.
 
 ## What is new
 
@@ -29,15 +29,16 @@ NTRIP Scope includes a graphical desktop client with a live RTCM3 decoder and a 
 - Configuration saving can select an existing file, confirm replacement, or reuse its name to save a new copy. Exported configurations omit passwords.
 - First map opening now initializes the camera without requiring pan or zoom to complete tile display; zoom is preserved when the rover moves.
 
-### iPhone and iPad 0.5.0
+### iPhone and iPad 0.5.1
 
 - All shared diagnostics through Android 0.4.3: separate caster/receiver streams, RTCM Fields/Measurements and stable history, C/N₀ chart, GPS sky, maps, mountpoint name and rover fix information, coordinate formats and manual-GGA priority.
 - **Stream outputs** now exposes file RTCM and local/LAN TCP output on iOS, alongside configurable bidirectional BLE. Outputs can run together.
 - Configuration saving now supports a remembered name, selecting an existing document, confirmed overwrite or saving a new copy. Exported passwords are omitted.
 - BLE profiles are remembered; disconnect waits for the OS before another connection opens. Background cleanup coordinates caster/TCP/file/BLE closure.
-- **Keep screen awake while streaming** prevents automatic screen lock in the foreground. On iOS, locking the phone or leaving the app closes the session; this differs from Android's screen-off service.
+- **New in 0.5.1: Keep BLE and stream in background (experimental)** is off by default. It retains an active, subscribed BLE link and attempts to continue the pipeline on screen lock/background. Without a ready BLE link, or after BLE loss in background, cleanup closes the session.
+- **Keep screen awake while streaming** is a separate foreground-only option. iOS may suspend networking even with BLE background enabled; uninterrupted RTCM is not guaranteed and needs physical-device validation. On return, a caster receive gap over 20 seconds stops the session and asks for reconnection. No automatic restart after force quit.
 
-Validation: Desktop 1.36 passed recorded macOS map/layout checks, 22 portable tests (two POSIX-only exclusions on Windows), Windows/Linux GUI and executable checks. Android 0.4.3 passed 41 Flutter tests, static analysis and release signature/version checks; its native shutdown/file/service code is unchanged from 0.4.1, where 13 native tests passed. iOS 0.5.0 passed 41 shared Flutter tests, 4 native XCTest checks and 3 integration tests on each of the iPhone and iPad simulators. The normal simulator app was launched; a device release build was signed and verified locally. Physical BLE and real Files/iCloud provider validation remain pending. Receiver-specific Android reconnection after standby still needs hardware confirmation.
+Validation: Desktop 1.36 passed recorded macOS map/layout checks, 22 portable tests (two POSIX-only exclusions on Windows), Windows/Linux GUI and executable checks. Android 0.4.3 passed 41 Flutter tests, static analysis and release signature/version checks; its native shutdown/file/service code is unchanged from 0.4.1, where 13 native tests passed. iOS 0.5.1 passed 45 shared Flutter tests, 8 native XCTest checks and 3 integration tests on each of the iPhone and iPad simulators. The normal simulator app was launched; a device release build was signed and verified locally. Physical BLE and real Files/iCloud provider validation remain pending. Receiver-specific Android reconnection after standby still needs hardware confirmation.
 
 ## Downloads
 
@@ -85,7 +86,7 @@ Android supports simultaneous file, TCP server and paired Bluetooth Classic SPP 
 
 ### iPhone and iPad client
 
-Version **0.5.0** supports iOS/iPadOS 15+. Download the [Xcode project](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.0/NTRIP-Scope-iOS-0.5.0-progetto.zip) or the [Apple Silicon Mac simulator app](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.0/NTRIP-Scope-iOS-0.5.0-Simulator.zip) from the [iOS release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/ios-v0.5.0).
+Version **0.5.1** supports iOS/iPadOS 15+. Download the [Xcode project](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.1/NTRIP-Scope-iOS-0.5.1-progetto.zip) or the [Apple Silicon Mac simulator app](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.1/NTRIP-Scope-iOS-0.5.1-Simulator.zip) from the [iOS release](https://github.com/zuliani71/NTRIP-Scope/releases/tag/ios-v0.5.1).
 
 For a physical iPhone/iPad, build with Xcode and your own Apple Account/Team. The simulator app cannot be installed on a phone. The public release contains no private development IPA, provisioning profile or signing keys. See the [installation, Bluetooth and troubleshooting guide](docs/iphone-ipad.md).
 
@@ -113,16 +114,16 @@ For a physical iPhone/iPad, build with Xcode and your own Apple Account/Team. Th
 
 Both mobile clients offer the graphical decoder, C/N₀ chart, map/GPS sky, INI import/export and simultaneous file/TCP/Bluetooth outputs. Neither provides a command-line interface or USB serial.
 
-| Mobile capability | Android 0.4.3 | iPhone/iPad 0.5.0 |
+| Mobile capability | Android 0.4.3 | iPhone/iPad 0.5.1 |
 |---|---|---|
 | Receiver link | Bluetooth Classic SPP, including HC-06 | Configurable BLE UART service; Classic HC-06 is not supported |
 | Corrections and position | RTCM to receiver; GGA back to caster; manual GGA takes priority | Same data directions over compatible BLE |
 | File/TCP output | Simultaneous with SPP | Simultaneous with BLE |
 | Decoder and map | Fields/Measurements, C/N₀, GPS sky, map with named mountpoint and rover fix | Shared graphical diagnostics and map information |
 | Configuration save | Document picker, overwrite confirmation or new copy | Files picker, overwrite confirmation or new copy |
-| Screen lock/background | Optional Keep streaming service | Session closes; optional Keep screen awake avoids automatic lock while foreground |
+| Screen lock/background | Optional Keep streaming service | Optional experimental BLE continuity requires an actual subscribed link; network may pause. Otherwise closes. Separate foreground Keep screen awake |
 
-Main uses shared mobile source version 0.5.0; the latest published Android APK is 0.4.3. Its exact source snapshot is tagged `android-v0.4.3`. CLI remains 1.32.
+Main uses shared mobile source version 0.5.1; the latest published Android APK is 0.4.3. Its exact source snapshot is tagged `android-v0.4.3`. CLI remains 1.32.
 
 The street map uses Apple Maps on macOS and OpenStreetMap on Windows and Linux. GPS tracks require broadcast RTCM 1019 ephemerides and a GPS MSM epoch.
 

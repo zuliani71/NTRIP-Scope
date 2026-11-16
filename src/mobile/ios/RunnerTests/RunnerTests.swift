@@ -4,6 +4,30 @@ import XCTest
 @testable import Runner
 
 class RunnerTests: XCTestCase {
+  func testBackgroundOffClosesEvenWithReadyBLE() {
+    let policy = BLEBackgroundPolicy(active: true, enabled: false)
+    XCTAssertFalse(policy.allowsContinuation(bleReady: true))
+    XCTAssertTrue(policy.mustCloseAfterLinkChange(inBackground: true, bleReady: true))
+  }
+  func testBackgroundNeedsActualBLESubscription() {
+    let policy = BLEBackgroundPolicy(active: true, enabled: true)
+    XCTAssertFalse(policy.allowsContinuation(bleReady: false))
+    XCTAssertTrue(policy.allowsContinuation(bleReady: true))
+  }
+  func testBLELossClosesOnlyActiveBackgroundSession() {
+    var policy = BLEBackgroundPolicy(active: true, enabled: true)
+    XCTAssertFalse(policy.mustCloseAfterLinkChange(inBackground: false, bleReady: false))
+    XCTAssertTrue(policy.mustCloseAfterLinkChange(inBackground: true, bleReady: false))
+    policy.active = false
+    XCTAssertFalse(policy.mustCloseAfterLinkChange(inBackground: true, bleReady: false))
+    XCTAssertFalse(policy.allowsContinuation(bleReady: true))
+  }
+  func testReadyBackgroundBLEIsRetainedUntilStop() {
+    var policy = BLEBackgroundPolicy(active: true, enabled: true)
+    XCTAssertFalse(policy.mustCloseAfterLinkChange(inBackground: true, bleReady: true))
+    policy.active = false
+    XCTAssertFalse(policy.allowsContinuation(bleReady: true))
+  }
   func withFile(_ body: (URL) throws -> Void) throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

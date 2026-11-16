@@ -109,6 +109,13 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   String configurationName = "ntripscope.ini";
   bool keepStreaming = false;
   bool keepScreenAwake = false;
+  bool keepBleInBackground = false;
+  bool get _iosBleContinuity =>
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      keepBleInBackground &&
+      receiverLinked &&
+      session != null &&
+      !session!.stopped;
   bool _hidden = false, _disposing = false;
   int _shutdowns = 0;
   Completer<void>? _sessionDone;
@@ -125,6 +132,11 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         _hidden = true;
         if (_backgroundLease?.ready != true)
           await stopSession(releaseReceiver: true);
+      } else if (call.method == 'backgroundBle') {
+        _hidden = true;
+        outputStatus(
+          'BLE background mode active · iOS may suspend network streaming',
+        );
       } else if (call.method == 'stop') {
         await stopSession(releaseReceiver: true);
       }
@@ -144,13 +156,19 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _hidden = false;
+      if (_iosBleContinuity &&
+          lastCasterAt != null &&
+          DateTime.now().difference(lastCasterAt!) >
+              const Duration(seconds: 20)) {
+        unawaited(stopStaleIosStream());
+      }
       if (mounted) setState(() {});
     } else if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _hidden = true;
       if (state == AppLifecycleState.detached ||
-          _backgroundLease?.ready != true) {
+          (_backgroundLease?.ready != true && !_iosBleContinuity)) {
         unawaited(stopSession(releaseReceiver: true));
       }
     }
@@ -397,6 +415,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         bluetoothName = values['bluetoothName'] as String?;
         keepStreaming = values['keepStreaming'] == true;
         keepScreenAwake = values['keepScreenAwake'] == true;
+        keepBleInBackground = values['keepBleInBackground'] == true;
         bleService.text = values['bleService'] as String? ?? bleService.text;
         bleWrite.text = values['bleWrite'] as String? ?? bleWrite.text;
         bleRead.text = values['bleRead'] as String? ?? bleRead.text;
@@ -424,6 +443,7 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
           'bluetoothName': bluetoothName,
           'keepStreaming': keepStreaming,
           'keepScreenAwake': keepScreenAwake,
+          'keepBleInBackground': keepBleInBackground,
           'bleService': bleService.text,
           'bleWrite': bleWrite.text,
           'bleRead': bleRead.text,
@@ -435,12 +455,20 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> stopStaleIosStream() async {
+    await stopSession(releaseReceiver: true);
+    if (mounted && !_hidden && session == null) {
+      showStatus('Background stream interrupted · reconnect to resume');
+    }
+  }
+
   Future<void> updateIosSession(bool active) async {
     if (!Platform.isIOS) return;
     try {
       await _lifecycleChannel.invokeMethod<void>('setSession', {
         'active': active,
         'keepAwake': keepScreenAwake,
+        'keepBle': keepBleInBackground,
       });
     } catch (error) {
       if (mounted && !_disposing) outputStatus(errorText(error));
@@ -737,9 +765,16 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
         );
         if (active.stopped) return;
         receiverLinked = bluetoothAddress != null;
+        await updateIosSession(true);
+        if (active.stopped) return;
         if (listenPort != null) {
           outputStatus(
             'TCP listening on ${allowNetwork ? 'the local network' : '127.0.0.1'}:${destinations.tcpPort}',
+          );
+        }
+        if (Platform.isIOS && keepBleInBackground && !receiverLinked) {
+          outputStatus(
+            'BLE background unavailable · connect a BLE receiver before locking the screen',
           );
         }
         if (record) {
@@ -1198,9 +1233,24 @@ class _ScopeHomeState extends State<ScopeHome> with WidgetsBindingObserver {
       if (Platform.isIOS)
         CheckboxListTile(
           contentPadding: EdgeInsets.zero,
+          title: const Text('Keep BLE and stream in background (experimental)'),
+          subtitle: const Text(
+            'Requires a connected BLE receiver with notifications. iOS can suspend network streaming; physical-device validation is required. Without BLE the session closes on screen lock. No restart after force quit.',
+          ),
+          value: keepBleInBackground,
+          onChanged: busy
+              ? null
+              : (value) {
+                  setState(() => keepBleInBackground = value!);
+                  unawaited(saveLocalSettings());
+                },
+        ),
+      if (Platform.isIOS)
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
           title: const Text('Keep screen awake while streaming'),
           subtitle: const Text(
-            'Prevents automatic screen lock during an active stream. Locking the phone or leaving the app closes the session on iOS.',
+            'Prevents automatic screen lock in the foreground. Background behavior is controlled separately by the BLE option.',
           ),
           value: keepScreenAwake,
           onChanged: busy

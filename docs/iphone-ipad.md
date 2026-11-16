@@ -1,6 +1,6 @@
 # NTRIP Scope for iPhone and iPad
 
-Version 0.5.0 is a development preview for iOS/iPadOS 15 or later. It shares diagnostics with Android through version 0.4.3 and adds the native iOS document, file-output and lifecycle paths. The same project supports iPhone and iPad.
+Version 0.5.1 is a development preview for iOS/iPadOS 15 or later. It shares diagnostics with Android through version 0.4.3 and adds the native iOS document, file-output and lifecycle paths. The same project supports iPhone and iPad.
 
 ## Features and differences
 
@@ -16,16 +16,25 @@ Use a BLE UART-style service exposing a writable RTCM characteristic and a notif
 
 HC-06 is Bluetooth Classic SPP and does not appear in this BLE scan. Use it with Android or desktop, or use a suitable BLE receiver/adapter for iOS. A Bluetooth version number alone does not establish compatibility. A dual-mode adapter may provide SPP for Android/desktop and BLE for iOS, but its actual firmware, UART profile, flow control and sustained RTCM throughput must be checked. No specific replacement module is certified by this release.
 
-## Screen lock and Stop
+## Screen lock, BLE and Stop
 
-**Keep screen awake while streaming** prevents automatic screen lock only while the app and stream are active in the foreground. Manual screen lock or leaving the app closes the session. Native code uses iOS's finite background time to finish caster/TCP/file/BLE cleanup. Reconnection waits for the previous BLE disconnect to be confirmed. This is not equivalent to Android's optional screen-off foreground service.
+There are two separate, locally remembered options:
 
-Apple background-task documentation: https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(expirationhandler:)
+- **Keep screen awake while streaming** prevents automatic screen lock while the app and stream are active in the foreground.
+- **Keep BLE and stream in background (experimental)** is off by default. Enable before Connect, connect a compatible BLE receiver and verify incoming GGA. On screen lock or app backgrounding, the app retains BLE and attempts to keep the NTRIP/file/TCP pipeline running only when the native BLE link is actually connected, has notifications enabled and provides a writable RTCM characteristic. Selecting a device name is insufficient.
+
+The app declares the official `bluetooth-central` background mode. BLE events can wake the app, but this does not grant unlimited socket/Dart execution. **Uninterrupted RTCM with the screen locked is not guaranteed.** Validate on a real iPhone/iPad and receiver for the intended duration before field use. File/iCloud providers may also restrict writes while locked. The app does not use fake audio or continuous location to bypass execution limits.
+
+With the option off, without a ready BLE link, or if BLE disconnects in background, controlled shutdown closes the session. Stop and force quit stop streaming; no automatic restart after OS termination. HC-06 Classic remains incompatible with iOS BLE.
+
+On return to the foreground, if the last local caster reception is older than 20 seconds, the app stops and shows **Background stream interrupted · reconnect to resume**. Wait for cleanup and press Connect. This is a local receive-time check, not a GNSS correction-age or RTK accuracy guarantee.
+
+Apple references: https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html and https://developer.apple.com/forums/thread/717396 .
 
 ## Install on a physical device
 
 1. Install Flutter and complete Xcode on a Mac. Add Flutter's `bin` to PATH (or set `FLUTTER_ROOT`). Run `flutter doctor` to check the environment.
-2. Download and extract the [0.5.0 Xcode project](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.0/NTRIP-Scope-iOS-0.5.0-progetto.zip).
+2. Download and extract the [0.5.1 Xcode project](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.1/NTRIP-Scope-iOS-0.5.1-progetto.zip).
 3. Run `Prepara-e-apri-iOS.command` inside the extracted project. It fetches dependencies, prepares the iOS build configuration and opens `ios/Runner.xcworkspace`.
 4. In Xcode, select the blue **Runner** project, the **Runner** target, then **Signing & Capabilities**. Select your **Team** and automatic signing. If needed, add your Apple Account in Xcode Settings and choose a unique bundle identifier for your own team.
 5. Connect and unlock the iPhone/iPad, trust the Mac if prompted, enable Developer Mode when requested, select the physical device as the run destination and press **Run**.
@@ -43,7 +52,7 @@ open ios/Runner.xcworkspace
 
 ## Simulator
 
-The [0.5.0 simulator ZIP](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.0/NTRIP-Scope-iOS-0.5.0-Simulator.zip) is built for an Apple Silicon Mac's iOS simulator. Extract `Runner.app`, start a compatible simulator and install it with Xcode tools:
+The [0.5.1 simulator ZIP](https://github.com/zuliani71/NTRIP-Scope/releases/download/ios-v0.5.1/NTRIP-Scope-iOS-0.5.1-Simulator.zip) is built for an Apple Silicon Mac's iOS simulator. Extract `Runner.app`, start a compatible simulator and install it with Xcode tools:
 
 ```sh
 xcrun simctl install booted /path/to/Runner.app
@@ -63,4 +72,4 @@ It cannot run on a physical iPhone or replace a real BLE receiver test.
 
 ## Recorded validation
 
-41 shared Flutter tests, four native XCTest document checks and three integration tests on each of the iPhone and iPad simulators passed. Integration checks cover UI options, native channels and real local TCP/caster sockets with Stop/reconnection. The normal simulator app was launched, and a physical-device release build was signed and verified locally. This does not certify physical BLE, all Files/iCloud providers or every phone's background behavior. Real receiver/provider validation remains pending.
+45 shared Flutter tests (including four simulated BLE-background lifecycle scenarios), eight native XCTest policy/document checks and three integration tests on each of the iPhone and iPad simulators passed. Integration checks cover UI options, native channels and real local TCP/caster sockets with Stop/reconnection. The normal simulator app was launched, and a physical-device release build was signed and verified locally. This does not certify physical BLE, all Files/iCloud providers or every phone's background behavior. Real receiver/provider validation and prolonged screen-off BLE/network continuity remain pending. Simulators and mocked BLE links do not validate a physical radio or OS suspension behavior.

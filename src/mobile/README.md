@@ -2,9 +2,26 @@
 
 NTRIP Scope Mobile è il client diagnostico per Android e iOS. Le due app usano lo stesso codice Flutter e hanno tre schede per configurare la connessione, ispezionare i byte in diretta e consultare i messaggi RTCM3 ricevuti.
 
-## Aggiornamento iPhone/iPad 0.5.0 — allineamento con Android
+## iPhone/iPad 0.5.1 — schermo e BLE in background (sperimentale)
 
-Guida pubblica in inglese, installazione e problemi noti: [iPhone and iPad guide](https://github.com/zuliani71/NTRIP-Scope/blob/main/docs/iphone-ipad.md). Il codice condiviso main è 0.5.0; l’ultimo APK Android pubblicato resta 0.4.3.
+In Connection sono disponibili due opzioni distinte:
+
+1. **Keep screen awake while streaming** evita il blocco automatico mentre l’app è in primo piano.
+2. **Keep BLE and stream in background (experimental)**, inizialmente disattivata, mantiene la connessione BLE e tenta di proseguire la pipeline NTRIP quando lo schermo viene bloccato o l’app passa in background. Richiede una connessione BLE reale con caratteristica notificante attiva e caratteristica RTCM scrivibile; non basta avere scelto un nome dalla scansione.
+
+Abilitare la seconda opzione prima di Connect, collegare un ricevitore BLE compatibile e verificare l’arrivo delle GGA, quindi provare il blocco dello schermo. Senza opzione, senza BLE pronto o quando il BLE si disconnette in background, la sessione viene chiusa ordinatamente. Stop e terminazione dell’app interrompono la sessione: nessun riavvio automatico dopo force quit o terminazione del processo da iOS. L’HC-06 Classic resta incompatibile con BLE iOS.
+
+Verifiche della0.5.1: analisi pulita,45 test Flutter,8 XCTest nativi e3 test funzionali su ciascun simulatore iPhone/iPad passati. Il link BLE dei test è simulato; nessun collaudo radio fisico.
+
+È dichiarato il background mode ufficiale **bluetooth-central**. Core Bluetooth può risvegliare l’app per eventi del ricevitore; questo non concede esecuzione illimitata al socket NTRIP. iOS può sospendere la rete/Dart anche con BLE attivo: **la continuità RTCM a schermo spento non è garantita e richiede un collaudo prolungato su telefono/ricevitore reale**. Non vengono usati audio fittizio o localizzazione continua per aggirare le regole del sistema.
+
+Al ritorno in primo piano, se l’ultima ricezione dal caster risale a oltre20 secondi, l’app chiude la sessione e mostra **Background stream interrupted · reconnect to resume**. Premere Connect per ripartire dopo la pulizia. È un controllo sul tempo di ricezione locale, non una misura dell’età GNSS delle correzioni o una certificazione RTK. Anche i provider File/iCloud possono limitare l’accesso in scrittura a dispositivo bloccato.
+
+La preferenza viene ricordata localmente, separata dal file INI. Il codice iOS conferma autonomamente lo stato BLE; perdita del collegamento e timer di vecchie chiusure non devono interferire con sessioni successive. Android conserva il servizio Keep streaming precedente; il suo APK corrente resta0.4.3.
+
+Riferimenti Apple: https://developer.apple.com/library/archive/documentation/NetworkingInternetWeb/Conceptual/CoreBluetooth_concepts/CoreBluetoothBackgroundProcessingForIOSApps/PerformingTasksWhileYourAppIsInTheBackground.html e https://developer.apple.com/forums/thread/717396 .
+
+## Versione precedente iPhone/iPad 0.5.0 — allineamento con Android
 
 Questa versione ricompila tutte le funzionalità condivise introdotte fino ad Android0.4.3 e completa i percorsi iOS rimasti indietro:
 
@@ -171,7 +188,7 @@ Configurare [l'ambiente iOS di Flutter](https://docs.flutter.dev/platform-integr
 BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter build ios --simulator
 ```
 
-Per preparare e aprire il progetto sul Mac, eseguire `Prepara-e-apri-iOS.command`: prepara le dipendenze e apre `ios/Runner.xcworkspace`. Richiede Flutter nel PATH oppure la variabile FLUTTER_ROOT impostata.
+Per preparare e aprire il progetto sul Mac, eseguire `Prepara-e-apri-iOS.command`: prepara le dipendenze e apre `ios/Runner.xcworkspace`. Richiede Flutter nel PATH o FLUTTER_ROOT impostata.
 
 Per installare su iPhone, selezionare il proprio team di firma per il target Runner in Xcode e usare `BYPASS_PERMISSION_LOCATION_ALWAYS=1 flutter run -d <device>`.
 

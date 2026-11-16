@@ -21,7 +21,9 @@ import UIKit
     documents = files
     let ble = BluetoothReceiver(messenger: registrar.messenger(), documents: files)
     receiver = ble
-    sessionLifecycle = SessionLifecycle(messenger: registrar.messenger(), receiver: ble, documents: files)
+    let lifecycle = SessionLifecycle(messenger: registrar.messenger(), receiver: ble, documents: files)
+    sessionLifecycle = lifecycle
+    ble.onLinkChanged = { [weak lifecycle] in lifecycle?.receiverLinkChanged() }
   }
 }
 
@@ -29,6 +31,10 @@ import CoreBluetooth
 
 /// Configurable BLE serial service. RTCM is written and GGA is received by notification.
 final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, FlutterStreamHandler {
+  var onLinkChanged: (() -> Void)?
+  var isReadyForBackground: Bool {
+    peripheral?.state == .connected && writer != nil && reader?.isNotifying == true && openResult == nil && closing.isEmpty
+  }
   private var central: CBCentralManager?
   private var events: FlutterEventSink?
   private var devices: [UUID: CBPeripheral] = [:]
@@ -47,6 +53,7 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
   private var waitingForAck = false
   private var closing: [UUID: CBPeripheral] = [:]
   private var closeResults: [FlutterResult] = []
+  private var closeGeneration = 0
 
   init(messenger: FlutterBinaryMessenger, documents: PlatformDocuments) {
     super.init()
@@ -178,6 +185,7 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
     guard error == nil, characteristic.isNotifying else { fail("Could not subscribe to receiver GGA"); return }
     let result = openResult; openResult = nil
     result?(nil)
+    onLinkChanged?()
   }
   func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
     guard self.peripheral === peripheral, characteristic === reader else { return }
@@ -242,15 +250,18 @@ final class BluetoothReceiver: NSObject, CBCentralManagerDelegate, CBPeripheralD
     opening?(FlutterError(code: "bluetooth", message: message, details: nil))
     writing?.result(FlutterError(code: "bluetooth", message: message, details: nil))
     if let device, device.state != .disconnected {
+      if closing.isEmpty { closeGeneration += 1 }
+      let currentClose = closeGeneration
       closing[device.identifier] = device
       central?.cancelPeripheralConnection(device)
       DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-        guard let self, !self.closing.isEmpty else { return }
+        guard let self, self.closeGeneration == currentClose, !self.closing.isEmpty else { return }
         let callbacks = self.closeResults; self.closeResults.removeAll()
         callbacks.forEach { $0(FlutterError(code: "bluetooth", message: "BLE disconnect is still pending; wait before reconnecting", details: nil)) }
         // Do not clear the barrier before the OS confirms disconnection.
       }
     }
+    onLinkChanged?()
     completeCloseIfReady()
   }
 }

@@ -71,6 +71,20 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(awake, findsOneWidget);
+      final bleBackground = find.text(
+        'Keep BLE and stream in background (experimental)',
+      );
+      await tester.scrollUntilVisible(
+        bleBackground,
+        -180,
+        scrollable: find
+            .descendant(
+              of: find.byType(ListView).first,
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(bleBackground, findsOneWidget);
       expect(find.text('Keep streaming with screen off'), findsNothing);
       await tester.tap(find.text('Live stream'));
       await tester.pumpAndSettle();
@@ -100,7 +114,11 @@ void main() {
       await lifecycle.invokeMethod<void>('setSession', {
         'active': true,
         'keepAwake': true,
+        'keepBle': true,
       });
+      final state = await lifecycle.invokeMapMethod<String, dynamic>('status');
+      expect(state!['bleReady'], false);
+      expect(state['backgroundEligible'], false);
       await lifecycle.invokeMethod<void>('setSession', {
         'active': false,
         'keepAwake': true,
